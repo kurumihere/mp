@@ -78,6 +78,16 @@ bool player_load(Player *player, const char *path)
     return true;
 }
 
+void player_clear(Player *player)
+{
+    ma_sound *sound = player_get_sound(player);
+
+    if (sound == NULL) return;
+
+    ma_sound_uninit(sound);
+    player->sound_initialized[player->active_sound] = false;
+}
+
 void player_set_volume(Player *player, float volume)
 {
     if (volume < 0.0f) volume = 0.0f;

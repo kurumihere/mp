@@ -15,6 +15,10 @@ void playlist_uninit(Playlist *playlist);
 
 bool playlist_replace(Playlist *playlist, const char *const *paths,
                       size_t count);
+bool playlist_append(Playlist *playlist, const char *const *paths,
+                     size_t count);
+bool playlist_remove(Playlist *playlist, size_t index);
+void playlist_clear(Playlist *playlist);
 bool playlist_select(Playlist *playlist, size_t index);
 
 const char *playlist_get(const Playlist *playlist, size_t index);

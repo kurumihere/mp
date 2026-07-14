@@ -506,32 +506,24 @@ int main(int argc, char **argv)
             FilePathList dropped_files = LoadDroppedFiles();
 
             if (dropped_files.count > 0) {
-                Playlist dropped_playlist;
-                playlist_init(&dropped_playlist);
+                size_t first_new_track = playlist_get_count(&playlist);
 
-                if (playlist_replace(&dropped_playlist,
-                                     (const char *const *)dropped_files.paths,
-                                     dropped_files.count)) {
-                    bool loaded = false;
-
-                    for (size_t i = 0; i < dropped_files.count; ++i) {
-                        if (play_track(&player, &dropped_playlist, i, file_name,
-                                       sizeof(file_name))) {
-                            loaded = true;
-                            break;
+                if (playlist_append(&playlist,
+                                    (const char *const *)dropped_files.paths,
+                                    dropped_files.count)) {
+                    if (player_get_state(&player) == PLAYER_STOPPED) {
+                        for (size_t i = first_new_track;
+                             i < playlist_get_count(&playlist); ++i) {
+                            if (play_track(&player, &playlist, i, file_name,
+                                           sizeof(file_name))) {
+                                finished_handled = false;
+                                break;
+                            }
                         }
                     }
 
-                    if (loaded) {
-                        playlist_uninit(&playlist);
-                        playlist = dropped_playlist;
-                        playlist_scroll = 0;
-                        finished_handled = false;
-                        mp_log(INFO, "Playlist loaded: %zu tracks",
-                               playlist_get_count(&playlist));
-                    } else {
-                        playlist_uninit(&dropped_playlist);
-                    }
+                    mp_log(INFO, "Added %u tracks to playlist",
+                           dropped_files.count);
                 }
             }
 
@@ -637,6 +629,45 @@ int main(int argc, char **argv)
                     break;
                 }
             }
+        }
+
+        bool control_down = IsKeyDown(KEY_LEFT_CONTROL) ||
+                            IsKeyDown(KEY_RIGHT_CONTROL);
+
+        if (control_down && IsKeyPressed(KEY_DELETE)) {
+            player_clear(&player);
+            playlist_clear(&playlist);
+            playlist_scroll = 0;
+            finished_handled = false;
+            seek_dragging = false;
+            snprintf(file_name, sizeof(file_name), "Drop an audio file");
+            mp_log(INFO, "Playlist cleared");
+        } else if (IsKeyPressed(KEY_DELETE) &&
+                   playlist_get_count(&playlist) > 0) {
+            size_t removed_index = playlist_get_current(&playlist);
+            player_clear(&player);
+            playlist_remove(&playlist, removed_index);
+            finished_handled = false;
+            seek_dragging = false;
+
+            size_t remaining = playlist_get_count(&playlist);
+            bool loaded = false;
+
+            for (size_t i = 0; i < remaining; ++i) {
+                size_t index = (removed_index + i) % remaining;
+
+                if (play_track(&player, &playlist, index, file_name,
+                               sizeof(file_name))) {
+                    loaded = true;
+                    break;
+                }
+            }
+
+            if (!loaded) {
+                snprintf(file_name, sizeof(file_name), "Drop an audio file");
+            }
+
+            mp_log(INFO, "Removed track from playlist");
         }
 
         bool sidebar_blocks_mouse =

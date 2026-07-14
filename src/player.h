@@ -24,6 +24,7 @@ typedef struct {
 
 bool player_init(Player *player);
 bool player_load(Player *player, const char *path);
+void player_clear(Player *player);
 void player_uninit(Player *player);
 
 bool player_toggle(Player *player);
