@@ -28,14 +28,19 @@ static bool build_raylib(Link_Mode mode)
     Cmd cmd = {0};
 
     for (size_t i = 0; i < ARRAY_LEN(sources); ++i) {
-        const char *inputs[] = {
+        const char *inputs[5] = {
             sources[i],
             "thirdparty/raylib/src/raylib.h",
             "thirdparty/raylib/src/config.h",
             "thirdparty/raylib/src/rlgl.h",
         };
+        size_t input_count = 4;
 
-        int rebuild = needs_rebuild(objects[i], inputs, ARRAY_LEN(inputs));
+        if (i == 4) {
+            inputs[input_count++] = "thirdparty/raylib/src/rtext_cyrillic.h";
+        }
+
+        int rebuild = needs_rebuild(objects[i], inputs, input_count);
 
         if (rebuild < 0) {
             cmd_free(cmd);

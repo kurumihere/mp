@@ -52,6 +52,7 @@
 #include "raylib.h"         // Declares module functions
 
 #include "config.h"         // Defines module configuration flags
+#include "rtext_cyrillic.h" // Extends the default font with Russian glyphs
 
 #if SUPPORT_MODULE_RTEXT
 
@@ -161,9 +162,10 @@ extern void LoadFontDefault(void)
     if (defaultFont.glyphs != NULL) return;
 
     // NOTE: Using UTF-8 encoding table for Unicode U+0000..U+00FF Basic Latin + Latin-1 Supplement
+    // and Russian Cyrillic letters U+0401, U+0410..U+044F and U+0451
     // REF: http://www.utf8-chartable.de/unicode-utf8-table.pl
 
-    defaultFont.glyphCount = 224; // Number of glyphs included in our default font
+    defaultFont.glyphCount = 224 + DEFAULT_FONT_CYRILLIC_GLYPH_COUNT; // Number of glyphs included in our default font
     defaultFont.glyphPadding = 0; // Characters padding
 
     // Default font is directly defined here (data generated from a sprite font image)
@@ -217,7 +219,7 @@ extern void LoadFontDefault(void)
     int charsHeight = 10;
     int charsDivisor = 1; // Every char is separated from the consecutive by a 1 pixel divisor, horizontally and vertically
 
-    int charsWidth[224] = { 3, 1, 4, 6, 5, 7, 6, 2, 3, 3, 5, 5, 2, 4, 1, 7, 5, 2, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 3, 4, 3, 6,
+    int charsWidth[224 + DEFAULT_FONT_CYRILLIC_GLYPH_COUNT] = { 3, 1, 4, 6, 5, 7, 6, 2, 3, 3, 5, 5, 2, 4, 1, 7, 5, 2, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 3, 4, 3, 6,
                             7, 6, 6, 6, 6, 6, 6, 6, 6, 3, 5, 6, 5, 7, 6, 6, 6, 6, 6, 6, 7, 6, 7, 7, 6, 6, 6, 2, 7, 2, 3, 5,
                             2, 5, 5, 5, 5, 5, 4, 5, 5, 1, 2, 5, 2, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 3, 1, 3, 4, 4,
                             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -225,18 +227,20 @@ extern void LoadFontDefault(void)
                             6, 6, 6, 6, 6, 6, 7, 6, 6, 6, 6, 6, 3, 3, 3, 3, 7, 6, 6, 6, 6, 6, 6, 5, 6, 6, 6, 6, 6, 6, 4, 6,
                             5, 5, 5, 5, 5, 5, 9, 5, 5, 5, 5, 5, 2, 2, 3, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 3, 5 };
 
+    for (int i = 0; i < DEFAULT_FONT_CYRILLIC_GLYPH_COUNT; i++) charsWidth[224 + i] = defaultFontCyrillicGlyphs[i].width;
+
     // Re-construct image from defaultFontData and generate OpenGL texture
     //----------------------------------------------------------------------
     Image imFont = {
-        .data = RL_CALLOC(128*128, 2),  // 2 bytes per pixel (gray + alpha)
+        .data = RL_CALLOC(128*256, 2),  // 2 bytes per pixel (gray + alpha)
         .width = 128,
-        .height = 128,
+        .height = 256,
         .mipmaps = 1,
         .format = PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA
     };
 
     // Fill image.data with defaultFontData (convert from bit to pixel!)
-    for (int i = 0, counter = 0; i < imFont.width*imFont.height; i += 32)
+    for (int i = 0, counter = 0; i < 128*128; i += 32)
     {
         for (int j = 31; j >= 0; j--)
         {
@@ -256,16 +260,6 @@ extern void LoadFontDefault(void)
         counter++;
     }
 
-    defaultFont.texture = LoadTextureFromImage(imFont);
-
-    // Check again if font glyph data has been already loaded
-    // to avoid reallocating the glyphs and rects
-    if (defaultFont.glyphs != NULL)
-    {
-        UnloadImage(imFont);
-        return;
-    }
-
     // Reconstruct charSet using charsWidth[], charsHeight, charsDivisor, glyphCount
     //------------------------------------------------------------------------------
     // Allocate space for our characters info data
@@ -279,7 +273,8 @@ extern void LoadFontDefault(void)
 
     for (int i = 0; i < defaultFont.glyphCount; i++)
     {
-        defaultFont.glyphs[i].value = 32 + i;  // First char is 32
+        if (i < 224) defaultFont.glyphs[i].value = 32 + i;  // First char is 32
+        else defaultFont.glyphs[i].value = defaultFontCyrillicGlyphs[i - 224].value;
 
         defaultFont.recs[i].x = (float)currentPosX;
         defaultFont.recs[i].y = (float)(charsDivisor + currentLine*(charsHeight + charsDivisor));
@@ -304,9 +299,38 @@ extern void LoadFontDefault(void)
         defaultFont.glyphs[i].offsetY = 0;
         defaultFont.glyphs[i].advanceX = 0;
 
+        if (i >= 224)
+        {
+            const DefaultFontCyrillicGlyph *glyph = &defaultFontCyrillicGlyphs[i - 224];
+            int dstX = (int)defaultFont.recs[i].x;
+            int dstY = (int)defaultFont.recs[i].y;
+            int bitmapSize = (glyph->pixels != NULL)? (int)strlen(glyph->pixels) : 0;
+            int bitmapHeight = (glyph->width > 0)? bitmapSize/glyph->width : 0;
+            int bitmapValid = (bitmapSize > 0) && (bitmapSize%glyph->width == 0) &&
+                (glyph->top >= 0) && (glyph->top + bitmapHeight <= charsHeight);
+
+            if (bitmapValid)
+            {
+                for (int y = 0; y < bitmapHeight; y++)
+                {
+                    for (int x = 0; x < glyph->width; x++)
+                    {
+                        if (glyph->pixels[y*glyph->width + x] == '#')
+                        {
+                            int dstIndex = (dstY + glyph->top + y)*imFont.width + dstX + x;
+                            ((unsigned short *)imFont.data)[dstIndex] = 0xffff;
+                        }
+                    }
+                }
+            }
+            else TRACELOG(LOG_WARNING, "FONT: Invalid bitmap for Cyrillic codepoint U+%04X", glyph->value);
+        }
+
         // Fill character image data from fontClear data
         defaultFont.glyphs[i].image = ImageFromImage(imFont, defaultFont.recs[i]);
     }
+
+    defaultFont.texture = LoadTextureFromImage(imFont);
 
     UnloadImage(imFont);
 
