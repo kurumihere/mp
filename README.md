@@ -9,6 +9,7 @@ icons.
 - MP3, FLAC, and WAV playback
 - drag-and-drop playlists
 - title, artist, and album metadata
+- embedded JPEG and PNG album artwork
 - seeking, volume control, and mute
 - repeat all, repeat one, and shuffle without repeats within a cycle
 - M3U and M3U8 playlist loading and saving

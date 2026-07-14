@@ -33,6 +33,80 @@ static uint32_t read_synchsafe(const unsigned char *data)
            ((uint32_t)(data[2] & 0x7f) << 7) | (uint32_t)(data[3] & 0x7f);
 }
 
+static bool bytes_match(const unsigned char *data, size_t length,
+                        const char *text)
+{
+    size_t text_length = strlen(text);
+
+    if (length != text_length) return false;
+
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char character = data[i];
+        unsigned char expected = (unsigned char)text[i];
+
+        if (character >= 'a' && character <= 'z') character -= 'a' - 'A';
+        if (expected >= 'a' && expected <= 'z') expected -= 'a' - 'A';
+        if (character != expected) return false;
+    }
+
+    return true;
+}
+
+static Track_Cover_Format cover_format_from_data(const unsigned char *data,
+                                                 size_t length)
+{
+    static const unsigned char png_signature[] = {
+        0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+    };
+
+    if (length >= sizeof(png_signature) &&
+        memcmp(data, png_signature, sizeof(png_signature)) == 0) {
+        return TRACK_COVER_PNG;
+    }
+
+    if (length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+        return TRACK_COVER_JPEG;
+    }
+
+    return TRACK_COVER_NONE;
+}
+
+static Track_Cover_Format cover_format_from_mime(const unsigned char *mime,
+                                                 size_t length)
+{
+    if (bytes_match(mime, length, "image/jpeg") ||
+        bytes_match(mime, length, "image/jpg") ||
+        bytes_match(mime, length, "jpg")) {
+        return TRACK_COVER_JPEG;
+    }
+
+    if (bytes_match(mime, length, "image/png") ||
+        bytes_match(mime, length, "png")) {
+        return TRACK_COVER_PNG;
+    }
+
+    return TRACK_COVER_NONE;
+}
+
+static bool copy_cover(Track_Cover *cover, const unsigned char *data,
+                       size_t size, Track_Cover_Format format)
+{
+    if (size == 0 || size > MAX_METADATA_BLOCK || format == TRACK_COVER_NONE) {
+        return false;
+    }
+
+    unsigned char *copy = malloc(size);
+
+    if (copy == NULL) return false;
+
+    memcpy(copy, data, size);
+    free(cover->data);
+    cover->data = copy;
+    cover->size = size;
+    cover->format = format;
+    return true;
+}
+
 static void copy_bytes(char *destination, size_t capacity,
                        const unsigned char *source, size_t length)
 {
@@ -179,7 +253,69 @@ static bool id_matches(const unsigned char *id, const char *v22,
     return memcmp(id, modern, 4) == 0;
 }
 
-static void load_id3v2(FILE *file, Track_Metadata *metadata)
+static bool parse_id3_cover(const unsigned char *data, size_t length,
+                            int version, const unsigned char **image,
+                            size_t *image_size, Track_Cover_Format *format,
+                            unsigned char *picture_type)
+{
+    if (length < 2) return false;
+
+    unsigned char encoding = data[0];
+    size_t offset;
+
+    if (version == 2) {
+        if (length < 5) return false;
+
+        *format = cover_format_from_mime(data + 1, 3);
+        offset = 4;
+    } else {
+        const unsigned char *mime_end = memchr(data + 1, '\0', length - 1);
+
+        if (mime_end == NULL) return false;
+
+        size_t mime_length = (size_t)(mime_end - (data + 1));
+        *format = cover_format_from_mime(data + 1, mime_length);
+        offset = (size_t)(mime_end - data) + 1;
+    }
+
+    if (offset >= length) return false;
+
+    *picture_type = data[offset++];
+    bool description_ended = false;
+
+    if (encoding == 1 || encoding == 2) {
+        while (offset + 1 < length) {
+            if (data[offset] == 0 && data[offset + 1] == 0) {
+                offset += 2;
+                description_ended = true;
+                break;
+            }
+
+            offset += 2;
+        }
+    } else {
+        const unsigned char *description_end =
+            memchr(data + offset, '\0', length - offset);
+
+        if (description_end != NULL) {
+            offset = (size_t)(description_end - data) + 1;
+            description_ended = true;
+        }
+    }
+
+    if (!description_ended || offset >= length) return false;
+
+    *image = data + offset;
+    *image_size = length - offset;
+
+    if (*format == TRACK_COVER_NONE) {
+        *format = cover_format_from_data(*image, *image_size);
+    }
+
+    return *format != TRACK_COVER_NONE;
+}
+
+static void load_id3v2(FILE *file, Track_Metadata *metadata, Track_Cover *cover)
 {
     unsigned char header[10];
 
@@ -194,12 +330,14 @@ static void load_id3v2(FILE *file, Track_Metadata *metadata)
 
     if (version < 2 || version > 4 || tag_size > MAX_METADATA_BLOCK) return;
 
-    unsigned char *tag = malloc(tag_size);
+    unsigned char *tag = malloc((size_t)tag_size + 1);
 
     if (tag == NULL || fread(tag, 1, tag_size, file) != tag_size) {
         free(tag);
         return;
     }
+
+    tag[tag_size] = 0;
 
     size_t offset = 0;
 
@@ -228,18 +366,35 @@ static void load_id3v2(FILE *file, Track_Metadata *metadata)
 
         if (frame_size > tag_size - offset) break;
 
-        if (metadata->title[0] == '\0' &&
-            id_matches(frame, "TT2", "TIT2", version)) {
-            decode_id3_text(metadata->title, sizeof(metadata->title),
-                            tag + offset, frame_size);
-        } else if (metadata->artist[0] == '\0' &&
-                   id_matches(frame, "TP1", "TPE1", version)) {
-            decode_id3_text(metadata->artist, sizeof(metadata->artist),
-                            tag + offset, frame_size);
-        } else if (metadata->album[0] == '\0' &&
-                   id_matches(frame, "TAL", "TALB", version)) {
-            decode_id3_text(metadata->album, sizeof(metadata->album),
-                            tag + offset, frame_size);
+        if (metadata != NULL) {
+            if (metadata->title[0] == '\0' &&
+                id_matches(frame, "TT2", "TIT2", version)) {
+                decode_id3_text(metadata->title, sizeof(metadata->title),
+                                tag + offset, frame_size);
+            } else if (metadata->artist[0] == '\0' &&
+                       id_matches(frame, "TP1", "TPE1", version)) {
+                decode_id3_text(metadata->artist, sizeof(metadata->artist),
+                                tag + offset, frame_size);
+            } else if (metadata->album[0] == '\0' &&
+                       id_matches(frame, "TAL", "TALB", version)) {
+                decode_id3_text(metadata->album, sizeof(metadata->album),
+                                tag + offset, frame_size);
+            }
+        }
+
+        if (cover != NULL && id_matches(frame, "PIC", "APIC", version)) {
+            const unsigned char *image;
+            size_t image_size;
+            Track_Cover_Format format;
+            unsigned char picture_type;
+
+            if (parse_id3_cover(tag + offset, frame_size, version, &image,
+                                &image_size, &format, &picture_type) &&
+                (cover->data == NULL || picture_type == 3) &&
+                copy_cover(cover, image, image_size, format) &&
+                picture_type == 3 && metadata == NULL) {
+                break;
+            }
         }
 
         offset += frame_size;
@@ -274,18 +429,7 @@ static void load_id3v1(FILE *file, Track_Metadata *metadata)
 static bool key_matches(const unsigned char *comment, size_t key_length,
                         const char *key)
 {
-    size_t expected_length = strlen(key);
-
-    if (key_length != expected_length) return false;
-
-    for (size_t i = 0; i < key_length; ++i) {
-        unsigned char character = comment[i];
-
-        if (character >= 'a' && character <= 'z') character -= 'a' - 'A';
-        if (character != (unsigned char)key[i]) return false;
-    }
-
-    return true;
+    return bytes_match(comment, key_length, key);
 }
 
 static void parse_vorbis_comments(const unsigned char *data, size_t length,
@@ -371,6 +515,101 @@ static void load_flac(FILE *file, Track_Metadata *metadata)
         free(block);
         return;
     }
+}
+
+static bool parse_flac_picture(const unsigned char *data, size_t length,
+                               const unsigned char **image, size_t *image_size,
+                               Track_Cover_Format *format,
+                               uint32_t *picture_type)
+{
+    if (length < 8) return false;
+
+    size_t offset = 0;
+    *picture_type = read_u32_be(data + offset);
+    offset += 4;
+
+    uint32_t mime_length = read_u32_be(data + offset);
+    offset += 4;
+
+    if (mime_length > length - offset) return false;
+
+    const unsigned char *mime = data + offset;
+    offset += mime_length;
+
+    if (length - offset < 4) return false;
+
+    uint32_t description_length = read_u32_be(data + offset);
+    offset += 4;
+
+    if (description_length > length - offset) return false;
+
+    offset += description_length;
+
+    if (length - offset < 20) return false;
+
+    offset += 16;
+    uint32_t data_length = read_u32_be(data + offset);
+    offset += 4;
+
+    if (data_length == 0 || data_length > length - offset) return false;
+
+    *image = data + offset;
+    *image_size = data_length;
+    *format = cover_format_from_mime(mime, mime_length);
+
+    if (*format == TRACK_COVER_NONE) {
+        *format = cover_format_from_data(*image, *image_size);
+    }
+
+    return *format != TRACK_COVER_NONE;
+}
+
+static bool load_flac_cover(FILE *file, Track_Cover *cover)
+{
+    if (fseek(file, 4, SEEK_SET) != 0) return false;
+
+    bool last_block = false;
+
+    while (!last_block) {
+        unsigned char header[4];
+
+        if (fread(header, 1, sizeof(header), file) != sizeof(header)) break;
+
+        last_block = (header[0] & 0x80) != 0;
+        unsigned int type = header[0] & 0x7f;
+        uint32_t length = read_u24_be(header + 1);
+
+        if (length > MAX_METADATA_BLOCK) break;
+
+        if (type != 6) {
+            if (fseek(file, (long)length, SEEK_CUR) != 0) break;
+            continue;
+        }
+
+        unsigned char *block = malloc(length);
+
+        if (block == NULL || fread(block, 1, length, file) != length) {
+            free(block);
+            break;
+        }
+
+        const unsigned char *image;
+        size_t image_size;
+        Track_Cover_Format format;
+        uint32_t picture_type;
+        bool parsed = parse_flac_picture(block, length, &image, &image_size,
+                                         &format, &picture_type);
+
+        if (parsed && (cover->data == NULL || picture_type == 3)) {
+            copy_cover(cover, image, image_size, format);
+        }
+
+        free(block);
+
+        if (parsed && picture_type == 3 && cover->data != NULL) break;
+    }
+
+    return cover->data != NULL;
 }
 
 static void load_wav(FILE *file, Track_Metadata *metadata)
@@ -486,7 +725,7 @@ void metadata_load(const char *path, Track_Metadata *metadata)
                    memcmp(signature + 8, "WAVE", 4) == 0) {
             load_wav(file, metadata);
         } else {
-            load_id3v2(file, metadata);
+            load_id3v2(file, metadata, NULL);
             load_id3v1(file, metadata);
         }
 
@@ -497,4 +736,32 @@ void metadata_load(const char *path, Track_Metadata *metadata)
         snprintf(metadata->title, sizeof(metadata->title), "%s",
                  file_name_from_path(path));
     }
+}
+
+bool metadata_cover_load(const char *path, Track_Cover *cover)
+{
+    *cover = (Track_Cover){0};
+
+    FILE *file = fopen(path, "rb");
+
+    if (file == NULL) return false;
+
+    unsigned char signature[12] = {0};
+    size_t signature_size = fread(signature, 1, sizeof(signature), file);
+
+    if (signature_size >= 4 && memcmp(signature, "fLaC", 4) == 0) {
+        load_flac_cover(file, cover);
+    } else if (!(signature_size >= 12 && memcmp(signature, "RIFF", 4) == 0 &&
+                 memcmp(signature + 8, "WAVE", 4) == 0)) {
+        load_id3v2(file, NULL, cover);
+    }
+
+    fclose(file);
+    return cover->data != NULL;
+}
+
+void metadata_cover_unload(Track_Cover *cover)
+{
+    free(cover->data);
+    *cover = (Track_Cover){0};
 }

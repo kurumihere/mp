@@ -28,13 +28,14 @@ static bool build_raylib(Link_Mode mode)
     Cmd cmd = {0};
 
     for (size_t i = 0; i < ARRAY_LEN(sources); ++i) {
-        const char *inputs[5] = {
+        const char *inputs[6] = {
             sources[i],
             "thirdparty/raylib/src/raylib.h",
             "thirdparty/raylib/src/config.h",
             "thirdparty/raylib/src/rlgl.h",
+            "nob.c",
         };
-        size_t input_count = 4;
+        size_t input_count = 5;
 
         if (i == 4) {
             inputs[input_count++] = "thirdparty/raylib/src/rtext_cyrillic.h";
@@ -57,7 +58,8 @@ static bool build_raylib(Link_Mode mode)
 
         cmd_append(&cmd, "-D_DEBUG", "-D_GNU_SOURCE", "-DPLATFORM_DESKTOP_GLFW",
                    "-DGRAPHICS_API_OPENGL_33", "-D_GLFW_X11",
-                   "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0");
+                   "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
+                   "-DSUPPORT_FILEFORMAT_JPG=1");
 
         if (i == 1) {
             cmd_append(&cmd, "-U_GNU_SOURCE");

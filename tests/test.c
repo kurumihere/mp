@@ -312,6 +312,17 @@ static void write_synchsafe(FILE *file, uint32_t value)
     fwrite(bytes, 1, sizeof(bytes), file);
 }
 
+static const unsigned char TEST_PNG_COVER[] = {
+    0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
+};
+
+static const unsigned char TEST_JPEG_COVER[] = {
+    0xff,
+    0xd8,
+    0xff,
+    0xd9,
+};
+
 static void write_id3_frame(FILE *file, const char id[4], const char *value)
 {
     fwrite(id, 1, 4, file);
@@ -322,6 +333,25 @@ static void write_id3_frame(FILE *file, const char id[4], const char *value)
     fwrite(value, 1, strlen(value), file);
 }
 
+static uint32_t id3_cover_frame_size(void)
+{
+    return 1u + (uint32_t)sizeof("image/png") + 1u + 1u +
+           (uint32_t)sizeof(TEST_PNG_COVER);
+}
+
+static void write_id3_cover_frame(FILE *file)
+{
+    fwrite("APIC", 1, 4, file);
+    write_u32_be(file, id3_cover_frame_size());
+    fputc(0, file);
+    fputc(0, file);
+    fputc(3, file);
+    fwrite("image/png", 1, sizeof("image/png"), file);
+    fputc(3, file);
+    fputc(0, file);
+    fwrite(TEST_PNG_COVER, 1, sizeof(TEST_PNG_COVER), file);
+}
+
 static bool write_id3_fixture(const char *path)
 {
     const char *values[] = {"ID3 Title", "ID3 Artist", "ID3 Album"};
@@ -330,6 +360,8 @@ static bool write_id3_fixture(const char *path)
     for (size_t i = 0; i < 3; ++i) {
         tag_size += 11u + (uint32_t)strlen(values[i]);
     }
+
+    tag_size += 10u + id3_cover_frame_size();
 
     FILE *file = fopen(path, "wb");
 
@@ -343,6 +375,7 @@ static bool write_id3_fixture(const char *path)
     write_id3_frame(file, "TIT2", values[0]);
     write_id3_frame(file, "TPE1", values[1]);
     write_id3_frame(file, "TALB", values[2]);
+    write_id3_cover_frame(file);
 
     return fclose(file) == 0;
 }
@@ -366,7 +399,7 @@ static bool write_flac_fixture(const char *path)
     if (file == NULL) return false;
 
     fwrite("fLaC", 1, 4, file);
-    fputc(0x84, file);
+    fputc(0x04, file);
     write_u24_be(file, block_size);
     write_u32_le(file, (uint32_t)strlen(vendor));
     fwrite(vendor, 1, strlen(vendor), file);
@@ -376,6 +409,23 @@ static bool write_flac_fixture(const char *path)
         write_u32_le(file, (uint32_t)strlen(comments[i]));
         fwrite(comments[i], 1, strlen(comments[i]), file);
     }
+
+    const char *mime = "image/jpeg";
+    uint32_t picture_size =
+        32u + (uint32_t)strlen(mime) + (uint32_t)sizeof(TEST_JPEG_COVER);
+
+    fputc(0x86, file);
+    write_u24_be(file, picture_size);
+    write_u32_be(file, 3);
+    write_u32_be(file, (uint32_t)strlen(mime));
+    fwrite(mime, 1, strlen(mime), file);
+    write_u32_be(file, 0);
+    write_u32_be(file, 1);
+    write_u32_be(file, 1);
+    write_u32_be(file, 24);
+    write_u32_be(file, 0);
+    write_u32_be(file, (uint32_t)sizeof(TEST_JPEG_COVER));
+    fwrite(TEST_JPEG_COVER, 1, sizeof(TEST_JPEG_COVER), file);
 
     return fclose(file) == 0;
 }
@@ -427,6 +477,26 @@ static void check_metadata(const char *path, const char *title,
     CHECK(strcmp(metadata.album, album) == 0);
 }
 
+static void check_cover(const char *path, Track_Cover_Format format,
+                        const unsigned char *data, size_t size)
+{
+    Track_Cover cover;
+    bool loaded = metadata_cover_load(path, &cover);
+
+    CHECK(loaded);
+
+    if (loaded) {
+        CHECK(cover.format == format);
+        CHECK(cover.size == size);
+        CHECK(memcmp(cover.data, data, size) == 0);
+    }
+
+    metadata_cover_unload(&cover);
+    CHECK(cover.data == NULL);
+    CHECK(cover.size == 0);
+    CHECK(cover.format == TRACK_COVER_NONE);
+}
+
 static void test_metadata(void)
 {
     const char *id3_path = "build/cache/test-metadata.mp3";
@@ -440,6 +510,14 @@ static void test_metadata(void)
     check_metadata(id3_path, "ID3 Title", "ID3 Artist", "ID3 Album");
     check_metadata(flac_path, "FLAC Title", "FLAC Artist", "FLAC Album");
     check_metadata(wav_path, "WAV Title", "WAV Artist", "WAV Album");
+    check_cover(id3_path, TRACK_COVER_PNG, TEST_PNG_COVER,
+                sizeof(TEST_PNG_COVER));
+    check_cover(flac_path, TRACK_COVER_JPEG, TEST_JPEG_COVER,
+                sizeof(TEST_JPEG_COVER));
+
+    Track_Cover wav_cover;
+    CHECK(!metadata_cover_load(wav_path, &wav_cover));
+    metadata_cover_unload(&wav_cover);
 
     Track_Metadata missing;
     metadata_load("/missing/Fallback.mp3", &missing);

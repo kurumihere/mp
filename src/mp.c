@@ -1,5 +1,7 @@
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "log.h"
 #include "m3u.h"
@@ -189,6 +191,11 @@ typedef struct {
 } Ui_Icons;
 
 typedef struct {
+    Texture2D texture;
+    char *track_path;
+} Album_Art;
+
+typedef struct {
     float scale;
     int width;
     int height;
@@ -209,6 +216,7 @@ typedef struct {
     Rectangle shuffle_button;
     Rectangle progress_bar;
     Rectangle progress_hitbox;
+    Rectangle album_art;
     Rectangle playlist_panel;
     Rectangle playlist_toggle;
 } Ui_Layout;
@@ -367,6 +375,99 @@ static Rectangle snap_rectangle(Rectangle rectangle)
     return rectangle;
 }
 
+static void album_art_clear(Album_Art *album_art)
+{
+    if (IsTextureValid(album_art->texture)) {
+        UnloadTexture(album_art->texture);
+    }
+
+    free(album_art->track_path);
+    *album_art = (Album_Art){0};
+}
+
+static void album_art_update(Album_Art *album_art, const char *track_path)
+{
+    if ((track_path == NULL && album_art->track_path == NULL) ||
+        (track_path != NULL && album_art->track_path != NULL &&
+         strcmp(track_path, album_art->track_path) == 0)) {
+        return;
+    }
+
+    album_art_clear(album_art);
+
+    if (track_path == NULL) return;
+
+    size_t path_size = strlen(track_path) + 1;
+    album_art->track_path = malloc(path_size);
+
+    if (album_art->track_path == NULL) {
+        mp_log(WARNING, "Failed to remember album art path");
+        return;
+    }
+
+    memcpy(album_art->track_path, track_path, path_size);
+
+    Track_Cover cover;
+
+    if (!metadata_cover_load(track_path, &cover)) return;
+
+    const char *file_type = cover.format == TRACK_COVER_JPEG ? ".jpg" : ".png";
+    Image image = {0};
+
+    if (cover.size <= INT_MAX) {
+        image = LoadImageFromMemory(file_type, cover.data, (int)cover.size);
+    }
+
+    metadata_cover_unload(&cover);
+
+    if (!IsImageValid(image)) {
+        mp_log(WARNING, "Failed to decode album art for \"%s\"", track_path);
+        return;
+    }
+
+    Texture2D texture = LoadTextureFromImage(image);
+    UnloadImage(image);
+
+    if (!IsTextureValid(texture)) {
+        mp_log(WARNING, "Failed to upload album art for \"%s\"", track_path);
+        return;
+    }
+
+    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
+    album_art->texture = texture;
+}
+
+static void draw_album_art(const Album_Art *album_art, Rectangle bounds)
+{
+    if (!IsTextureValid(album_art->texture) || bounds.width <= 0.0f ||
+        bounds.height <= 0.0f) {
+        return;
+    }
+
+    float horizontal_scale = bounds.width / album_art->texture.width;
+    float vertical_scale = bounds.height / album_art->texture.height;
+    float scale =
+        horizontal_scale < vertical_scale ? horizontal_scale : vertical_scale;
+    Rectangle destination = snap_rectangle((Rectangle){
+        bounds.x +
+            (bounds.width - (float)album_art->texture.width * scale) / 2.0f,
+        bounds.y +
+            (bounds.height - (float)album_art->texture.height * scale) / 2.0f,
+        (float)album_art->texture.width * scale,
+        (float)album_art->texture.height * scale,
+    });
+    Rectangle source = {
+        0.0f,
+        0.0f,
+        (float)album_art->texture.width,
+        (float)album_art->texture.height,
+    };
+
+    DrawRectangleRec(bounds, (Color){24, 24, 24, 255});
+    DrawTexturePro(album_art->texture, source, destination, (Vector2){0}, 0.0f,
+                   WHITE);
+}
+
 static int crisp_font_size(float desired, int minimum, int maximum)
 {
     int size = ((int)desired + 5) / 10 * 10;
@@ -404,6 +505,29 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
     float previous_x = play_x - gap - button_size;
     float panel_x = (float)width - panel_width;
     float panel_y = snap_pixel(((float)height - panel_height) / 2.0f);
+    float title_y = snap_pixel(controls_y - 128.0f * scale);
+    float album_art_gap = snap_pixel(20.0f * scale);
+    float album_art_size =
+        snap_pixel(clamp_float(360.0f * scale, 120.0f, 420.0f));
+    float max_album_art_width = (float)width - padding * 2.0f;
+    float max_album_art_height = title_y - album_art_gap - padding;
+
+    if (album_art_size > max_album_art_width) {
+        album_art_size = max_album_art_width;
+    }
+
+    if (album_art_size > max_album_art_height) {
+        album_art_size = max_album_art_height;
+    }
+
+    if (album_art_size < 0.0f) album_art_size = 0.0f;
+
+    Rectangle album_art = {
+        padding,
+        title_y - album_art_gap - album_art_size,
+        album_art_size,
+        album_art_size,
+    };
 
     if (panel_width + toggle_width + gap + padding > (float)width) {
         panel_width = (float)width - toggle_width - gap - padding;
@@ -417,7 +541,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .title_size = crisp_font_size(32.0f * scale, 20, 50),
         .status_size = crisp_font_size(18.0f * scale, 10, 30),
         .title_x = padding,
-        .title_y = snap_pixel(controls_y - 128.0f * scale),
+        .title_y = title_y,
         .details_y = snap_pixel(controls_y - 82.0f * scale),
         .metadata_y = snap_pixel(controls_y - 37.0f * scale),
         .playlist_top = snap_pixel(panel_y + 64.0f * scale),
@@ -435,6 +559,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
                 previous_x - gap - padding,
                 progress_height,
             },
+        .album_art = album_art,
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
         .playlist_toggle =
             {
@@ -452,6 +577,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
     layout.repeat_button = snap_rectangle(layout.repeat_button);
     layout.shuffle_button = snap_rectangle(layout.shuffle_button);
     layout.progress_bar = snap_rectangle(layout.progress_bar);
+    layout.album_art = snap_rectangle(layout.album_art);
     layout.playlist_panel = snap_rectangle(layout.playlist_panel);
     layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
 
@@ -762,6 +888,7 @@ int main(int argc, char **argv)
     SetTextureFilter(GetFontDefault().texture, TEXTURE_FILTER_POINT);
     SetTargetFPS(60);
 
+    Album_Art album_art = {0};
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
@@ -1090,6 +1217,11 @@ int main(int argc, char **argv)
         }
 
         state = player_get_state(&player);
+        const char *album_art_path =
+            state == PLAYER_STOPPED
+                ? NULL
+                : playlist_get(&playlist, playlist_get_current(&playlist));
+        album_art_update(&album_art, album_art_path);
         const char *status;
 
         switch (state) {
@@ -1182,6 +1314,7 @@ int main(int argc, char **argv)
             DrawText(drop_text, drop_text_x, drop_text_y, drop_text_size,
                      RAYWHITE);
         } else {
+            draw_album_art(&album_art, layout.album_art);
             DrawText(metadata.title, (int)layout.title_x, (int)layout.title_y,
                      title_size, RAYWHITE);
             DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
@@ -1245,6 +1378,7 @@ int main(int argc, char **argv)
         session_save(session_path, &playlist, &saved_state);
     }
 
+    album_art_clear(&album_art);
     unload_ui_icons(&icons);
     CloseWindow();
 
