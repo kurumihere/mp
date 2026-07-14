@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,6 +10,9 @@
 #include "playback_order.h"
 #include "playlist.h"
 #include "session.h"
+#include "spectrum.h"
+
+#define TEST_PI 3.14159265358979323846f
 
 static int failures;
 
@@ -121,6 +125,55 @@ static void test_playlist(void)
     playlist_clear(&playlist);
     CHECK(playlist_get_count(&playlist) == 0);
     playlist_uninit(&playlist);
+}
+
+static void test_spectrum(void)
+{
+    Spectrum spectrum;
+    spectrum_init(&spectrum);
+
+    float samples[SPECTRUM_SAMPLE_COUNT] = {0};
+    const unsigned int sample_rate = 48000;
+    const size_t bar_count = 32;
+
+    spectrum_update(&spectrum, samples, sample_rate, bar_count, 1.0f / 60.0f);
+
+    for (size_t i = 0; i < bar_count; ++i) {
+        CHECK(spectrum.levels[i] == 0.0f);
+    }
+
+    const size_t frequency_bin = 32;
+
+    for (size_t i = 0; i < SPECTRUM_SAMPLE_COUNT; ++i) {
+        float phase =
+            2.0f * TEST_PI * frequency_bin * (float)i / SPECTRUM_SAMPLE_COUNT;
+        samples[i] = 0.5f * sinf(phase);
+    }
+
+    for (int frame = 0; frame < 20; ++frame) {
+        spectrum_update(&spectrum, samples, sample_rate, bar_count,
+                        1.0f / 60.0f);
+    }
+
+    size_t peak_bar = 0;
+
+    for (size_t i = 1; i < bar_count; ++i) {
+        if (spectrum.levels[i] > spectrum.levels[peak_bar]) peak_bar = i;
+    }
+
+    CHECK(spectrum.levels[peak_bar] > 0.5f);
+    CHECK(peak_bar >= 18 && peak_bar <= 20);
+
+    memset(samples, 0, sizeof(samples));
+
+    for (int frame = 0; frame < 60; ++frame) {
+        spectrum_update(&spectrum, samples, sample_rate, bar_count,
+                        1.0f / 60.0f);
+    }
+
+    CHECK(spectrum.levels[peak_bar] < 0.02f);
+    spectrum_reset(&spectrum);
+    CHECK(spectrum.bar_count == 0);
 }
 
 static void test_m3u(void)
@@ -534,6 +587,7 @@ int main(void)
 {
     test_playback_order();
     test_playlist();
+    test_spectrum();
     test_m3u();
     test_session();
     test_metadata();

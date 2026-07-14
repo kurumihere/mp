@@ -10,6 +10,7 @@ icons.
 - drag-and-drop playlists
 - title, artist, and album metadata
 - embedded JPEG and PNG album artwork
+- adaptive CAVA-style audio spectrum
 - seeking, volume control, and mute
 - repeat all, repeat one, and shuffle without repeats within a cycle
 - M3U and M3U8 playlist loading and saving
@@ -92,7 +93,7 @@ the interface.
 
 ## Tests
 
-Run the core playback-order, playlist, M3U, and metadata checks with:
+Run the core playback-order, playlist, M3U, metadata, and spectrum checks with:
 
 ```sh
 ./nob test

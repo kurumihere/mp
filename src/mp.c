@@ -12,10 +12,16 @@
 #include "playlist.h"
 #include "raylib.h"
 #include "session.h"
+#include "spectrum.h"
 #include "svg.h"
 
 #define ASSET_PATH_SIZE 4096
 #define SESSION_PATH_SIZE 4096
+#define SPECTRUM_DISPLAY_MAX_BARS 32
+
+#if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
+#error Player analysis and spectrum sample counts must match
+#endif
 
 static bool play_track(Player *player, Playlist *playlist, size_t index,
                        Track_Metadata *metadata)
@@ -218,6 +224,7 @@ typedef struct {
     Rectangle progress_bar;
     Rectangle progress_hitbox;
     Rectangle album_art;
+    Rectangle spectrum;
     Rectangle playlist_panel;
     Rectangle playlist_toggle;
     Rectangle playlist_toggle_reveal;
@@ -470,6 +477,62 @@ static void draw_album_art(const Album_Art *album_art, Rectangle bounds)
                    WHITE);
 }
 
+static size_t spectrum_bar_count(Rectangle bounds, float scale)
+{
+    if (bounds.width <= 0.0f || bounds.height <= 0.0f) return 0;
+
+    float desired_step = clamp_float(24.0f * scale, 16.0f, 32.0f);
+    size_t count = (size_t)(bounds.width / desired_step);
+
+    if (count < 8) count = 8;
+    if (count > SPECTRUM_DISPLAY_MAX_BARS) {
+        count = SPECTRUM_DISPLAY_MAX_BARS;
+    }
+
+    return count;
+}
+
+static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
+                          size_t bar_count, float scale)
+{
+    if (bar_count == 0 || bounds.width <= 0.0f || bounds.height <= 0.0f) {
+        return;
+    }
+
+    float bar_gap = snap_pixel(clamp_float(8.0f * scale, 5.0f, 11.0f));
+    float bar_width =
+        (bounds.width - bar_gap * (float)(bar_count - 1)) / bar_count;
+
+    bar_width = floorf(bar_width);
+
+    if (bar_width < 1.0f) bar_width = 1.0f;
+
+    float available_height = bounds.height;
+    float bottom = bounds.y + bounds.height;
+    float block_width =
+        bar_width * (float)bar_count + bar_gap * (float)(bar_count - 1);
+    float start_x = snap_pixel(bounds.x + (bounds.width - block_width) / 2.0f);
+    const Color bar_color = {210, 210, 210, 255};
+
+    for (size_t bar = 0; bar < bar_count; ++bar) {
+        float level = clamp_float(spectrum->levels[bar], 0.0f, 1.0f);
+        float height = level * available_height;
+        float x = snap_pixel(start_x + (bar_width + bar_gap) * (float)bar);
+
+        if (level < 0.01f) continue;
+        if (height < 1.0f) height = 1.0f;
+
+        Rectangle column = snap_rectangle((Rectangle){
+            x,
+            bottom - height,
+            bar_width,
+            height,
+        });
+
+        DrawRectangleRec(column, bar_color);
+    }
+}
+
 static void draw_scrolling_text(const char *text, Rectangle bounds,
                                 int font_size, float scale, Color color,
                                 double started_at)
@@ -561,6 +624,15 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         album_art_size,
         album_art_size,
     };
+    float spectrum_x = album_art.x + album_art.width + padding;
+    Rectangle spectrum = {
+        spectrum_x,
+        album_art.y,
+        (float)width - padding - spectrum_x,
+        album_art.height,
+    };
+
+    if (spectrum.width < 0.0f) spectrum.width = 0.0f;
 
     if (panel_width + toggle_width + gap + padding > (float)width) {
         panel_width = (float)width - toggle_width - gap - padding;
@@ -593,6 +665,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
                 progress_height,
             },
         .album_art = album_art,
+        .spectrum = spectrum,
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
         .playlist_toggle =
             {
@@ -642,6 +715,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
     layout.shuffle_button = snap_rectangle(layout.shuffle_button);
     layout.progress_bar = snap_rectangle(layout.progress_bar);
     layout.album_art = snap_rectangle(layout.album_art);
+    layout.spectrum = snap_rectangle(layout.spectrum);
     layout.playlist_panel = snap_rectangle(layout.playlist_panel);
     layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
     layout.playlist_toggle_reveal =
@@ -963,6 +1037,8 @@ int main(int argc, char **argv)
     SetTargetFPS(60);
 
     Album_Art album_art = {0};
+    Spectrum spectrum;
+    spectrum_init(&spectrum);
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
@@ -1409,6 +1485,22 @@ int main(int argc, char **argv)
             if (title_size < 10) title_size = 10;
         }
 
+        size_t bar_count = spectrum_bar_count(layout.spectrum, layout.scale);
+
+        if (has_track && bar_count > 0) {
+            float samples[SPECTRUM_SAMPLE_COUNT];
+            unsigned int sample_rate = 0;
+            size_t copied = player_copy_analysis_samples(
+                &player, samples, SPECTRUM_SAMPLE_COUNT, &sample_rate);
+
+            if (copied == SPECTRUM_SAMPLE_COUNT) {
+                spectrum_update(&spectrum, samples, sample_rate, bar_count,
+                                GetFrameTime());
+            }
+        } else {
+            spectrum_reset(&spectrum);
+        }
+
         BeginDrawing();
         ClearBackground(background);
 
@@ -1423,6 +1515,7 @@ int main(int argc, char **argv)
                      RAYWHITE);
         } else {
             draw_album_art(&album_art, layout.album_art);
+            draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale);
             DrawText(metadata.title, (int)layout.title_x, (int)layout.title_y,
                      title_size, RAYWHITE);
             DrawText(details_text, (int)layout.title_x, (int)layout.details_y,

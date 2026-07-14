@@ -2,8 +2,12 @@
 #define MP_PLAYER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "miniaudio.h"
+
+#define PLAYER_ANALYSIS_SAMPLE_COUNT 1024
+#define PLAYER_ANALYSIS_BUFFER_SIZE (PLAYER_ANALYSIS_SAMPLE_COUNT * 2)
 
 typedef enum {
     PLAYER_STOPPED,
@@ -20,6 +24,10 @@ typedef struct {
     int active_sound;
     float volume;
     bool muted;
+    ma_atomic_float analysis_samples[PLAYER_ANALYSIS_BUFFER_SIZE];
+    ma_atomic_uint32 analysis_cursor;
+    ma_atomic_uint32 analysis_channels;
+    ma_atomic_uint32 analysis_sample_rate;
 } Player;
 
 bool player_init(Player *player);
@@ -38,5 +46,8 @@ float player_get_cursor(const Player *player);
 float player_get_length(const Player *player);
 float player_get_volume(const Player *player);
 bool player_is_muted(const Player *player);
+size_t player_copy_analysis_samples(const Player *player, float *samples,
+                                    size_t sample_count,
+                                    unsigned int *sample_rate);
 
 #endif
