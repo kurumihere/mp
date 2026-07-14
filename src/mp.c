@@ -1052,6 +1052,7 @@ int main(int argc, char **argv)
     double current_title_text_started_at = GetTime();
     bool finished_handled = false;
     bool seek_dragging = false;
+    bool seek_resume_playback = false;
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
 
     while (!WindowShouldClose()) {
@@ -1231,6 +1232,7 @@ int main(int argc, char **argv)
             playlist_scroll = 0;
             finished_handled = false;
             seek_dragging = false;
+            seek_resume_playback = false;
             metadata = (Track_Metadata){0};
             mp_log(INFO, "Playlist cleared");
         } else if (has_track && IsKeyPressed(KEY_DELETE) &&
@@ -1240,6 +1242,7 @@ int main(int argc, char **argv)
             playlist_remove(&playlist, removed_index);
             finished_handled = false;
             seek_dragging = false;
+            seek_resume_playback = false;
 
             size_t remaining = playlist_get_count(&playlist);
             bool loaded = false;
@@ -1325,22 +1328,24 @@ int main(int argc, char **argv)
         bool can_next =
             has_track && playback_order_can_next(&playback_order, repeat_all);
 
-        if ((IsKeyPressed(KEY_RIGHT) && can_next) ||
-            button_pressed(layout.next_button, mouse,
-                           can_next && !sidebar_blocks_mouse)) {
+        if (!seek_dragging &&
+            ((IsKeyPressed(KEY_RIGHT) && can_next) ||
+             button_pressed(layout.next_button, mouse,
+                            can_next && !sidebar_blocks_mouse))) {
             play_next_track(&player, &playlist, &playback_order, repeat_all,
                             &metadata);
         }
 
-        if ((IsKeyPressed(KEY_LEFT) && can_previous) ||
-            button_pressed(layout.previous_button, mouse,
-                           can_previous && !sidebar_blocks_mouse)) {
+        if (!seek_dragging &&
+            ((IsKeyPressed(KEY_LEFT) && can_previous) ||
+             button_pressed(layout.previous_button, mouse,
+                            can_previous && !sidebar_blocks_mouse))) {
             play_previous_track(&player, &playlist, &playback_order, repeat_all,
                                 &metadata);
         }
 
         bool toggle_requested =
-            has_track &&
+            has_track && !seek_dragging &&
             (IsKeyPressed(KEY_SPACE) ||
              button_pressed(layout.play_button, mouse, !sidebar_blocks_mouse));
 
@@ -1396,12 +1401,18 @@ int main(int argc, char **argv)
             CheckCollisionPointRec(mouse, layout.progress_hitbox);
 
         if (progress_hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            seek_resume_playback = player_get_state(&player) == PLAYER_PLAYING;
+
+            if (seek_resume_playback && !player_toggle(&player)) {
+                exit_code = 1;
+                break;
+            }
+
             seek_dragging = true;
         }
 
-        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-            seek_dragging = false;
-        }
+        bool seek_finished =
+            seek_dragging && !IsMouseButtonDown(MOUSE_BUTTON_LEFT);
 
         if (seek_dragging && length > 0.0f) {
             float progress =
@@ -1410,12 +1421,23 @@ int main(int argc, char **argv)
             if (progress < 0.0f) progress = 0.0f;
             if (progress > 1.0f) progress = 1.0f;
 
-            if (!player_seek(&player, length * progress)) {
+            cursor = length * progress;
+        }
+
+        if (seek_finished) {
+            seek_dragging = false;
+
+            if (length > 0.0f && !player_seek(&player, cursor)) {
                 exit_code = 1;
                 break;
             }
 
-            cursor = player_get_cursor(&player);
+            if (seek_resume_playback && !player_toggle(&player)) {
+                exit_code = 1;
+                break;
+            }
+
+            seek_resume_playback = false;
         }
 
         state = player_get_state(&player);
