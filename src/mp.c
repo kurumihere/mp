@@ -556,9 +556,35 @@ int main(int argc, char **argv)
             player_adjust_volume(&player, volume_change);
         }
 
-        if (IsKeyPressed(KEY_M)) {
+        float volume_padding = 4.0f * layout.scale;
+        int volume_slot_width = MeasureText("Volume 100%", layout.status_size);
+        Rectangle volume_bounds = {
+            layout.progress_bar.x + layout.progress_bar.width -
+                (float)volume_slot_width - volume_padding,
+            layout.metadata_y - volume_padding,
+            (float)volume_slot_width + volume_padding * 2.0f,
+            (float)layout.status_size + volume_padding * 2.0f,
+        };
+
+        if (IsKeyPressed(KEY_M) ||
+            button_pressed(volume_bounds, mouse,
+                           has_track && !sidebar_blocks_mouse)) {
             player_toggle_mute(&player);
         }
+
+        char volume_text[64];
+
+        if (player_is_muted(&player)) {
+            snprintf(volume_text, sizeof(volume_text), "Muted");
+        } else {
+            snprintf(volume_text, sizeof(volume_text), "Volume %d%%",
+                     (int)(player_get_volume(&player) * 100.0f + 0.5f));
+        }
+
+        int volume_x = (int)(layout.progress_bar.x + layout.progress_bar.width -
+                             MeasureText(volume_text, layout.status_size));
+        bool volume_hovered = has_track && !sidebar_blocks_mouse &&
+                              CheckCollisionPointRec(mouse, volume_bounds);
 
         float cursor = player_get_cursor(&player);
         float length = player_get_length(&player);
@@ -613,24 +639,12 @@ int main(int argc, char **argv)
                  (int)cursor / 60, (int)cursor % 60, (int)length / 60,
                  (int)length % 60);
 
-        char volume_text[64];
-
-        if (player_is_muted(&player)) {
-            snprintf(volume_text, sizeof(volume_text), "Muted");
-        } else {
-            snprintf(volume_text, sizeof(volume_text), "Volume %d%%",
-                     (int)(player_get_volume(&player) * 100.0f + 0.5f));
-        }
-
         int status_x = (int)layout.progress_bar.x;
 
         int time_x = (int)(layout.progress_bar.x +
                            (layout.progress_bar.width -
                             MeasureText(time_text, layout.status_size)) /
                                2.0f);
-
-        int volume_x = (int)(layout.progress_bar.x + layout.progress_bar.width -
-                             MeasureText(volume_text, layout.status_size));
 
         char playlist_text[64];
 
@@ -691,7 +705,7 @@ int main(int argc, char **argv)
             DrawText(time_text, time_x, (int)layout.metadata_y,
                      layout.status_size, GRAY);
             DrawText(volume_text, volume_x, (int)layout.metadata_y,
-                     layout.status_size, GRAY);
+                     layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
 
             DrawRectangleRec(layout.progress_bar, progress_background);
             DrawRectangleRec(progress_fill, progress_hovered
