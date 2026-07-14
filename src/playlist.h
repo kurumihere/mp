@@ -4,8 +4,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "metadata.h"
+
 typedef struct {
     char **paths;
+    Track_Metadata *metadata;
     size_t count;
     size_t current;
 } Playlist;
@@ -22,6 +25,8 @@ void playlist_clear(Playlist *playlist);
 bool playlist_select(Playlist *playlist, size_t index);
 
 const char *playlist_get(const Playlist *playlist, size_t index);
+const Track_Metadata *playlist_get_metadata(const Playlist *playlist,
+                                            size_t index);
 size_t playlist_get_count(const Playlist *playlist);
 size_t playlist_get_current(const Playlist *playlist);
 

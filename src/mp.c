@@ -15,7 +15,14 @@ static bool play_track(Player *player, Playlist *playlist, size_t index,
     if (path == NULL || !player_load(player, path)) return false;
 
     playlist_select(playlist, index);
-    metadata_load(path, metadata);
+    const Track_Metadata *selected_metadata =
+        playlist_get_metadata(playlist, index);
+
+    if (selected_metadata != NULL) {
+        *metadata = *selected_metadata;
+    } else {
+        metadata_load(path, metadata);
+    }
 
     return true;
 }
@@ -211,6 +218,21 @@ static float clamp_float(float value, float minimum, float maximum)
     return value;
 }
 
+static float snap_pixel(float value)
+{
+    return (float)((int)(value + 0.5f));
+}
+
+static Rectangle snap_rectangle(Rectangle rectangle)
+{
+    rectangle.x = snap_pixel(rectangle.x);
+    rectangle.y = snap_pixel(rectangle.y);
+    rectangle.width = snap_pixel(rectangle.width);
+    rectangle.height = snap_pixel(rectangle.height);
+
+    return rectangle;
+}
+
 static int crisp_font_size(float desired, int minimum, int maximum)
 {
     int size = ((int)desired + 5) / 10 * 10;
@@ -230,23 +252,24 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
 
     scale = clamp_float(scale, 0.65f, 2.0f);
 
-    float button_size = clamp_float(48.0f * scale, 32.0f, 72.0f);
-    float progress_height = clamp_float(6.0f * scale, 4.0f, 10.0f);
-    float padding = clamp_float(12.0f * scale, 8.0f, 24.0f);
-    float gap = clamp_float(8.0f * scale, 6.0f, 16.0f);
+    float button_size = snap_pixel(clamp_float(48.0f * scale, 32.0f, 72.0f));
+    float progress_height = snap_pixel(clamp_float(6.0f * scale, 4.0f, 10.0f));
+    float padding = snap_pixel(clamp_float(12.0f * scale, 8.0f, 24.0f));
+    float gap = snap_pixel(clamp_float(8.0f * scale, 6.0f, 16.0f));
     float controls_y = (float)height - padding - button_size;
-    float panel_width = clamp_float(320.0f * scale, 220.0f, 460.0f);
+    float panel_width = snap_pixel(clamp_float(320.0f * scale, 220.0f, 460.0f));
+    float panel_max_height = (float)height - padding * 2.0f;
     float panel_height =
-        clamp_float(420.0f * scale, 240.0f, (float)height - padding * 2.0f);
-    float toggle_width = clamp_float(32.0f * scale, 24.0f, 48.0f);
-    float toggle_height = clamp_float(72.0f * scale, 52.0f, 108.0f);
+        snap_pixel(clamp_float(420.0f * scale, 240.0f, panel_max_height));
+    float toggle_width = snap_pixel(clamp_float(32.0f * scale, 24.0f, 48.0f));
+    float toggle_height = snap_pixel(clamp_float(72.0f * scale, 52.0f, 108.0f));
     float shuffle_x = (float)width - padding - button_size;
     float repeat_x = shuffle_x - gap - button_size;
     float next_x = repeat_x - gap - button_size;
     float play_x = next_x - gap - button_size;
     float previous_x = play_x - gap - button_size;
     float panel_x = (float)width - panel_width;
-    float panel_y = ((float)height - panel_height) / 2.0f;
+    float panel_y = snap_pixel(((float)height - panel_height) / 2.0f);
 
     if (panel_width + toggle_width + gap + padding > (float)width) {
         panel_width = (float)width - toggle_width - gap - padding;
@@ -260,12 +283,12 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .title_size = crisp_font_size(32.0f * scale, 20, 50),
         .status_size = crisp_font_size(18.0f * scale, 10, 30),
         .title_x = padding,
-        .title_y = controls_y - 128.0f * scale,
-        .details_y = controls_y - 82.0f * scale,
-        .metadata_y = controls_y - 37.0f * scale,
-        .playlist_top = panel_y + 64.0f * scale,
-        .playlist_item_height = 42.0f * scale,
-        .playlist_item_gap = 4.0f * scale,
+        .title_y = snap_pixel(controls_y - 128.0f * scale),
+        .details_y = snap_pixel(controls_y - 82.0f * scale),
+        .metadata_y = snap_pixel(controls_y - 37.0f * scale),
+        .playlist_top = snap_pixel(panel_y + 64.0f * scale),
+        .playlist_item_height = snap_pixel(62.0f * scale),
+        .playlist_item_gap = snap_pixel(4.0f * scale),
         .previous_button = {previous_x, controls_y, button_size, button_size},
         .play_button = {play_x, controls_y, button_size, button_size},
         .next_button = {next_x, controls_y, button_size, button_size},
@@ -289,12 +312,21 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
             },
     };
 
-    layout.progress_hitbox = (Rectangle){
+    layout.previous_button = snap_rectangle(layout.previous_button);
+    layout.play_button = snap_rectangle(layout.play_button);
+    layout.next_button = snap_rectangle(layout.next_button);
+    layout.repeat_button = snap_rectangle(layout.repeat_button);
+    layout.shuffle_button = snap_rectangle(layout.shuffle_button);
+    layout.progress_bar = snap_rectangle(layout.progress_bar);
+    layout.playlist_panel = snap_rectangle(layout.playlist_panel);
+    layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
+
+    layout.progress_hitbox = snap_rectangle((Rectangle){
         layout.progress_bar.x,
         layout.progress_bar.y - 9.0f * scale,
         layout.progress_bar.width,
         24.0f * scale,
-    };
+    });
 
     float playlist_space = layout.playlist_panel.y +
                            layout.playlist_panel.height - layout.playlist_top -
@@ -313,14 +345,14 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
 static Rectangle playlist_item_bounds(const Ui_Layout *layout,
                                       int visible_index)
 {
-    return (Rectangle){
+    return snap_rectangle((Rectangle){
         layout->playlist_panel.x + 12.0f * layout->scale,
         layout->playlist_top +
             (float)visible_index *
                 (layout->playlist_item_height + layout->playlist_item_gap),
         layout->playlist_panel.width - 24.0f * layout->scale,
         layout->playlist_item_height,
-    };
+    });
 }
 
 static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
@@ -381,20 +413,21 @@ static void draw_playlist_panel(const Playlist *playlist,
                                 int scroll)
 {
     Rectangle panel = layout->playlist_panel;
-    int item_text_size = crisp_font_size(18.0f * layout->scale, 10, 30);
+    int title_size = crisp_font_size(25.0f * layout->scale, 20, 40);
+    int details_size = crisp_font_size(16.0f * layout->scale, 10, 30);
     size_t count = playlist_get_count(playlist);
     size_t current = playlist_get_current(playlist);
 
     DrawRectangleRec(panel, (Color){24, 24, 24, 255});
     DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
              (int)(panel.y + panel.height), (Color){55, 55, 55, 255});
-    DrawText("Playlist", (int)(panel.x + 20.0f * layout->scale),
-             (int)(panel.y + 20.0f * layout->scale),
+    DrawText("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+             (int)snap_pixel(panel.y + 20.0f * layout->scale),
              crisp_font_size(26.0f * layout->scale, 20, 40), RAYWHITE);
 
     if (count == 0) {
-        DrawText("No tracks", (int)(panel.x + 20.0f * layout->scale),
-                 (int)(panel.y + 70.0f * layout->scale),
+        DrawText("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+                 (int)snap_pixel(panel.y + 70.0f * layout->scale),
                  crisp_font_size(20.0f * layout->scale, 10, 30), GRAY);
         return;
     }
@@ -415,17 +448,51 @@ static void draw_playlist_panel(const Playlist *playlist,
 
         DrawRectangleRec(item, fill);
 
-        char item_text[1024];
-        const char *path = playlist_get(playlist, index);
+        const Track_Metadata *metadata = playlist_get_metadata(playlist, index);
 
-        snprintf(item_text, sizeof(item_text), "%zu. %s", index + 1,
-                 GetFileName(path));
+        if (metadata == NULL) continue;
+
+        char title[METADATA_TEXT_SIZE + 32];
+        snprintf(title, sizeof(title), "%zu. %s", index + 1, metadata->title);
 
         BeginScissorMode((int)item.x + 10, (int)item.y, (int)item.width - 20,
                          (int)item.height);
-        DrawText(item_text, (int)item.x + 10,
-                 (int)(item.y + (item.height - item_text_size) / 2.0f),
-                 item_text_size, index == current ? RAYWHITE : LIGHTGRAY);
+        int text_x = (int)item.x + 10;
+
+        bool has_artist = metadata->artist[0] != '\0';
+        bool has_album = metadata->album[0] != '\0';
+
+        if (!has_artist && !has_album) {
+            DrawText(title, text_x,
+                     (int)(item.y + (item.height - title_size) / 2.0f),
+                     title_size, index == current ? RAYWHITE : LIGHTGRAY);
+        } else {
+            DrawText(title, text_x,
+                     (int)snap_pixel(item.y + 5.0f * layout->scale), title_size,
+                     index == current ? RAYWHITE : LIGHTGRAY);
+
+            int details_y = (int)snap_pixel(item.y + 39.0f * layout->scale);
+            Color details_color = index == current ? LIGHTGRAY : GRAY;
+
+            if (has_artist) {
+                DrawText(metadata->artist, text_x, details_y, details_size,
+                         details_color);
+                text_x += MeasureText(metadata->artist, details_size);
+            }
+
+            if (has_artist && has_album) {
+                int separator_gap = (int)snap_pixel(5.0f * layout->scale);
+                text_x += separator_gap;
+                DrawText("|", text_x, details_y, details_size, DARKGRAY);
+                text_x += MeasureText("|", details_size) + separator_gap;
+            }
+
+            if (has_album) {
+                DrawText(metadata->album, text_x, details_y, details_size,
+                         details_color);
+            }
+        }
+
         EndScissorMode();
     }
 }
@@ -741,15 +808,15 @@ int main(int argc, char **argv)
             player_adjust_volume(&player, volume_change);
         }
 
-        float volume_padding = 4.0f * layout.scale;
+        float volume_padding = snap_pixel(4.0f * layout.scale);
         int volume_slot_width = MeasureText("Volume 100%", layout.status_size);
-        Rectangle volume_bounds = {
+        Rectangle volume_bounds = snap_rectangle((Rectangle){
             layout.progress_bar.x + layout.progress_bar.width -
                 (float)volume_slot_width - volume_padding,
             layout.metadata_y - volume_padding,
             (float)volume_slot_width + volume_padding * 2.0f,
             (float)layout.status_size + volume_padding * 2.0f,
-        };
+        });
 
         if (IsKeyPressed(KEY_M) ||
             button_pressed(volume_bounds, mouse,
@@ -838,7 +905,7 @@ int main(int argc, char **argv)
                  playlist_get_count(&playlist));
 
         int playlist_x = status_x + MeasureText(status, layout.status_size) +
-                         (int)(18.0f * layout.scale);
+                         (int)snap_pixel(18.0f * layout.scale);
 
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
 
@@ -859,13 +926,14 @@ int main(int argc, char **argv)
         Rectangle progress_fill = {
             layout.progress_bar.x,
             layout.progress_bar.y,
-            layout.progress_bar.width * progress,
+            snap_pixel(layout.progress_bar.width * progress),
             layout.progress_bar.height,
         };
 
         Vector2 progress_handle = {
-            progress_fill.x + progress_fill.width,
-            layout.progress_bar.y + layout.progress_bar.height / 2.0f,
+            snap_pixel(progress_fill.x + progress_fill.width),
+            snap_pixel(layout.progress_bar.y +
+                       layout.progress_bar.height / 2.0f),
         };
 
         int title_size = layout.title_size;
@@ -909,10 +977,11 @@ int main(int argc, char **argv)
             DrawRectangleRec(progress_fill, progress_hovered
                                                 ? progress_hover
                                                 : progress_foreground);
-            DrawCircleV(progress_handle,
-                        (progress_hovered ? 7.0f : 5.0f) * layout.scale,
-                        progress_hovered ? progress_hover
-                                         : progress_foreground);
+            float radius_scale = progress_hovered ? 7.0f : 5.0f;
+            float handle_radius = snap_pixel(radius_scale * layout.scale);
+            Color handle_color =
+                progress_hovered ? progress_hover : progress_foreground;
+            DrawCircleV(progress_handle, handle_radius, handle_color);
 
             draw_button(layout.previous_button, BUTTON_PREVIOUS, &icons, mouse,
                         can_previous, false);

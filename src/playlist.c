@@ -28,6 +28,7 @@ void playlist_uninit(Playlist *playlist)
     }
 
     free(playlist->paths);
+    free(playlist->metadata);
     *playlist = (Playlist){0};
 }
 
@@ -37,27 +38,7 @@ bool playlist_replace(Playlist *playlist, const char *const *paths,
     Playlist replacement;
     playlist_init(&replacement);
 
-    if (count > 0) {
-        replacement.paths = calloc(count, sizeof(*replacement.paths));
-
-        if (replacement.paths == NULL) {
-            mp_log(ERROR, "Failed to allocate playlist");
-            return false;
-        }
-    }
-
-    for (size_t i = 0; i < count; ++i) {
-        replacement.paths[i] = copy_string(paths[i]);
-
-        if (replacement.paths[i] == NULL) {
-            replacement.count = i;
-            playlist_uninit(&replacement);
-            mp_log(ERROR, "Failed to copy playlist path");
-            return false;
-        }
-
-        replacement.count = i + 1;
-    }
+    if (!playlist_append(&replacement, paths, count)) return false;
 
     playlist_uninit(playlist);
     *playlist = replacement;
@@ -65,8 +46,7 @@ bool playlist_replace(Playlist *playlist, const char *const *paths,
     return true;
 }
 
-bool playlist_append(Playlist *playlist, const char *const *paths,
-                     size_t count)
+bool playlist_append(Playlist *playlist, const char *const *paths, size_t count)
 {
     if (count == 0) return true;
     if (count > SIZE_MAX - playlist->count) {
@@ -74,50 +54,57 @@ bool playlist_append(Playlist *playlist, const char *const *paths,
         return false;
     }
 
-    char **copies = calloc(count, sizeof(*copies));
-
-    if (copies == NULL) {
-        mp_log(ERROR, "Failed to allocate playlist additions");
-        return false;
-    }
-
-    for (size_t i = 0; i < count; ++i) {
-        copies[i] = copy_string(paths[i]);
-
-        if (copies[i] == NULL) {
-            for (size_t j = 0; j < i; ++j) free(copies[j]);
-            free(copies);
-            mp_log(ERROR, "Failed to copy playlist path");
-            return false;
-        }
-    }
-
     size_t new_count = playlist->count + count;
 
-    if (new_count > SIZE_MAX / sizeof(*playlist->paths)) {
-        for (size_t i = 0; i < count; ++i) free(copies[i]);
-        free(copies);
+    if (new_count > SIZE_MAX / sizeof(*playlist->paths) ||
+        new_count > SIZE_MAX / sizeof(*playlist->metadata)) {
         mp_log(ERROR, "Playlist is too large");
         return false;
     }
 
-    char **new_paths = realloc(playlist->paths,
-                               new_count * sizeof(*playlist->paths));
+    char **new_paths = malloc(new_count * sizeof(*new_paths));
+    Track_Metadata *new_metadata = malloc(new_count * sizeof(*new_metadata));
 
-    if (new_paths == NULL) {
-        for (size_t i = 0; i < count; ++i) free(copies[i]);
-        free(copies);
+    if (new_paths == NULL || new_metadata == NULL) {
+        free(new_paths);
+        free(new_metadata);
         mp_log(ERROR, "Failed to grow playlist");
         return false;
     }
 
-    playlist->paths = new_paths;
-
-    for (size_t i = 0; i < count; ++i) {
-        playlist->paths[playlist->count + i] = copies[i];
+    if (playlist->count > 0) {
+        memcpy(new_paths, playlist->paths,
+               playlist->count * sizeof(*new_paths));
+        memcpy(new_metadata, playlist->metadata,
+               playlist->count * sizeof(*new_metadata));
     }
 
-    free(copies);
+    size_t added = 0;
+
+    for (; added < count; ++added) {
+        size_t index = playlist->count + added;
+        new_paths[index] = copy_string(paths[added]);
+
+        if (new_paths[index] == NULL) break;
+
+        metadata_load(new_paths[index], &new_metadata[index]);
+    }
+
+    if (added != count) {
+        for (size_t i = 0; i < added; ++i) {
+            free(new_paths[playlist->count + i]);
+        }
+
+        free(new_paths);
+        free(new_metadata);
+        mp_log(ERROR, "Failed to copy playlist path");
+        return false;
+    }
+
+    free(playlist->paths);
+    free(playlist->metadata);
+    playlist->paths = new_paths;
+    playlist->metadata = new_metadata;
     playlist->count = new_count;
     return true;
 }
@@ -129,11 +116,15 @@ bool playlist_remove(Playlist *playlist, size_t index)
     free(playlist->paths[index]);
     memmove(&playlist->paths[index], &playlist->paths[index + 1],
             (playlist->count - index - 1) * sizeof(*playlist->paths));
+    memmove(&playlist->metadata[index], &playlist->metadata[index + 1],
+            (playlist->count - index - 1) * sizeof(*playlist->metadata));
     --playlist->count;
 
     if (playlist->count == 0) {
         free(playlist->paths);
+        free(playlist->metadata);
         playlist->paths = NULL;
+        playlist->metadata = NULL;
         playlist->current = 0;
     } else if (playlist->current > index) {
         --playlist->current;
@@ -162,6 +153,14 @@ const char *playlist_get(const Playlist *playlist, size_t index)
     if (index >= playlist->count) return NULL;
 
     return playlist->paths[index];
+}
+
+const Track_Metadata *playlist_get_metadata(const Playlist *playlist,
+                                            size_t index)
+{
+    if (index >= playlist->count) return NULL;
+
+    return &playlist->metadata[index];
 }
 
 size_t playlist_get_count(const Playlist *playlist)

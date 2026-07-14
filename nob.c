@@ -247,6 +247,7 @@ static bool build_playlist(void)
         "src/playlist.c",
         "src/playlist.h",
         "src/log.h",
+        "src/metadata.h",
         "nob.c",
     };
 
