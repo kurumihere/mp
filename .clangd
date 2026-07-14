@@ -3,3 +3,4 @@ CompileFlags:
     - -std=c99
     - -I../thirdparty/raylib/src
     - -I../thirdparty/miniaudio
+    - -I../thirdparty/nanosvg

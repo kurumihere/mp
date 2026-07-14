@@ -136,6 +136,61 @@ static bool build_miniaudio(void)
     return result;
 }
 
+static bool build_nanosvg(void)
+{
+    const char *inputs[] = {
+        "thirdparty/nanosvg/nanosvg.c",
+        "thirdparty/nanosvg/nanosvg.h",
+        "thirdparty/nanosvg/nanosvgrast.h",
+    };
+
+    int rebuild =
+        needs_rebuild("build/cache/nanosvg.o", inputs, ARRAY_LEN(inputs));
+
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return true;
+
+    Cmd cmd = {0};
+
+    cmd_append(&cmd, "cc", "-c", "thirdparty/nanosvg/nanosvg.c", "-o",
+               "build/cache/nanosvg.o", "-std=c99", "-g", "-fPIC", "-I",
+               "thirdparty/nanosvg");
+
+    bool result = cmd_run(&cmd);
+    cmd_free(cmd);
+
+    return result;
+}
+
+static bool build_svg(void)
+{
+    const char *inputs[] = {
+        "src/svg.c",
+        "src/svg.h",
+        "src/log.h",
+        "thirdparty/raylib/src/raylib.h",
+        "thirdparty/nanosvg/nanosvg.h",
+        "thirdparty/nanosvg/nanosvgrast.h",
+        "nob.c",
+    };
+
+    int rebuild = needs_rebuild("build/cache/svg.o", inputs, ARRAY_LEN(inputs));
+
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return true;
+
+    Cmd cmd = {0};
+
+    cmd_append(&cmd, "cc", "-c", "src/svg.c", "-o", "build/cache/svg.o",
+               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+               "-I", "thirdparty/raylib/src", "-I", "thirdparty/nanosvg");
+
+    bool result = cmd_run(&cmd);
+    cmd_free(cmd);
+
+    return result;
+}
+
 static bool build_log(void)
 {
     const char *inputs[] = {
@@ -224,6 +279,7 @@ static bool build_app(Link_Mode mode)
         "src/log.h",
         "src/player.h",
         "src/playlist.h",
+        "src/svg.h",
         "nob.c",
     };
 
@@ -259,9 +315,11 @@ static bool build_app(Link_Mode mode)
     const char *link_inputs[] = {
         "build/cache/mp.o",
         "build/cache/miniaudio.o",
+        "build/cache/nanosvg.o",
         "build/cache/log.o",
         "build/cache/player.o",
         "build/cache/playlist.o",
+        "build/cache/svg.o",
         library,
         "nob.c",
     };
@@ -275,8 +333,9 @@ static bool build_app(Link_Mode mode)
 
     if (rebuild > 0) {
         cmd_append(&cmd, "cc", "-o", output, "build/cache/mp.o",
-                   "build/cache/miniaudio.o", "build/cache/log.o",
-                   "build/cache/player.o", "build/cache/playlist.o");
+                   "build/cache/miniaudio.o", "build/cache/nanosvg.o",
+                   "build/cache/log.o", "build/cache/player.o",
+                   "build/cache/playlist.o", "build/cache/svg.o");
 
         if (mode == LINK_STATIC) {
             cmd_append(&cmd, "build/cache/libraylib.a");
@@ -351,9 +410,11 @@ int main(int argc, char **argv)
     if (!mkdir_if_not_exists("build/cache")) return 1;
     if (!build_raylib(mode)) return 1;
     if (!build_miniaudio()) return 1;
+    if (!build_nanosvg()) return 1;
     if (!build_log()) return 1;
     if (!build_player()) return 1;
     if (!build_playlist()) return 1;
+    if (!build_svg()) return 1;
     if (!build_app(mode)) return 1;
 
     if (should_run && !run_app(argc, argv)) return 1;
