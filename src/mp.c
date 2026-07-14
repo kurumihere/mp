@@ -507,18 +507,11 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
     float panel_y = snap_pixel(((float)height - panel_height) / 2.0f);
     float title_y = snap_pixel(controls_y - 128.0f * scale);
     float album_art_gap = snap_pixel(20.0f * scale);
-    float album_art_size =
-        snap_pixel(clamp_float(360.0f * scale, 120.0f, 420.0f));
     float max_album_art_width = (float)width - padding * 2.0f;
     float max_album_art_height = title_y - album_art_gap - padding;
-
-    if (album_art_size > max_album_art_width) {
-        album_art_size = max_album_art_width;
-    }
-
-    if (album_art_size > max_album_art_height) {
-        album_art_size = max_album_art_height;
-    }
+    float album_art_size = snap_pixel(max_album_art_width < max_album_art_height
+                                          ? max_album_art_width
+                                          : max_album_art_height);
 
     if (album_art_size < 0.0f) album_art_size = 0.0f;
 
