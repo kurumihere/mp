@@ -1043,7 +1043,8 @@ int main(int argc, char **argv)
             make_ui_layout(GetScreenWidth(), GetScreenHeight(), playlist_open);
         bool playlist_toggle_visible =
             has_track &&
-            CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal);
+            (playlist_open ||
+             CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
 
         bool playlist_toggled =
             playlist_toggle_visible &&
@@ -1054,6 +1055,7 @@ int main(int argc, char **argv)
             layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
                                     playlist_open);
             playlist_toggle_visible =
+                playlist_open ||
                 CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal);
         }
 
@@ -1173,7 +1175,9 @@ int main(int argc, char **argv)
         }
 
         bool sidebar_blocks_mouse =
-            mouse_over_playlist || playlist_toggle_visible;
+            mouse_over_playlist ||
+            (playlist_toggle_visible &&
+             CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
         bool controls_enabled = has_track && !sidebar_blocks_mouse;
         bool repeat_pressed =
             button_pressed(layout.repeat_button, mouse, controls_enabled);
