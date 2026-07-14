@@ -246,14 +246,37 @@ static bool build_player(void)
     return result;
 }
 
+static bool build_playback_order(void)
+{
+    const char *inputs[] = {
+        "src/playback_order.c",
+        "src/playback_order.h",
+        "nob.c",
+    };
+
+    int rebuild = needs_rebuild("build/cache/playback_order.o", inputs,
+                                ARRAY_LEN(inputs));
+
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return true;
+
+    Cmd cmd = {0};
+
+    cmd_append(&cmd, "cc", "-c", "src/playback_order.c", "-o",
+               "build/cache/playback_order.o", "-std=c99", "-g", "-Wall",
+               "-Wextra", "-Wpedantic", "-Werror");
+
+    bool result = cmd_run(&cmd);
+    cmd_free(cmd);
+
+    return result;
+}
+
 static bool build_playlist(void)
 {
     const char *inputs[] = {
-        "src/playlist.c",
-        "src/playlist.h",
-        "src/log.h",
-        "src/metadata.h",
-        "nob.c",
+        "src/playlist.c", "src/playlist.h", "src/log.h",
+        "src/metadata.h", "nob.c",
     };
 
     int rebuild =
@@ -291,8 +314,8 @@ static bool build_metadata(void)
     Cmd cmd = {0};
 
     cmd_append(&cmd, "cc", "-c", "src/metadata.c", "-o",
-               "build/cache/metadata.o", "-std=c99", "-g", "-Wall",
-               "-Wextra", "-Wpedantic", "-Werror");
+               "build/cache/metadata.o", "-std=c99", "-g", "-Wall", "-Wextra",
+               "-Wpedantic", "-Werror");
 
     bool result = cmd_run(&cmd);
     cmd_free(cmd);
@@ -324,6 +347,7 @@ static bool build_app(Link_Mode mode)
         "thirdparty/miniaudio/miniaudio.h",
         "src/log.h",
         "src/metadata.h",
+        "src/playback_order.h",
         "src/player.h",
         "src/playlist.h",
         "src/svg.h",
@@ -366,6 +390,7 @@ static bool build_app(Link_Mode mode)
         "build/cache/log.o",
         "build/cache/metadata.o",
         "build/cache/player.o",
+        "build/cache/playback_order.o",
         "build/cache/playlist.o",
         "build/cache/svg.o",
         library,
@@ -383,8 +408,8 @@ static bool build_app(Link_Mode mode)
         cmd_append(&cmd, "cc", "-o", output, "build/cache/mp.o",
                    "build/cache/miniaudio.o", "build/cache/nanosvg.o",
                    "build/cache/log.o", "build/cache/player.o",
-                   "build/cache/playlist.o", "build/cache/svg.o",
-                   "build/cache/metadata.o");
+                   "build/cache/playback_order.o", "build/cache/playlist.o",
+                   "build/cache/svg.o", "build/cache/metadata.o");
 
         if (mode == LINK_STATIC) {
             cmd_append(&cmd, "build/cache/libraylib.a");
@@ -463,6 +488,7 @@ int main(int argc, char **argv)
     if (!build_log()) return 1;
     if (!build_metadata()) return 1;
     if (!build_player()) return 1;
+    if (!build_playback_order()) return 1;
     if (!build_playlist()) return 1;
     if (!build_svg()) return 1;
     if (!build_app(mode)) return 1;

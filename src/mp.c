@@ -1,7 +1,9 @@
+#include <limits.h>
 #include <stdio.h>
 
 #include "log.h"
 #include "metadata.h"
+#include "playback_order.h"
 #include "player.h"
 #include "playlist.h"
 #include "raylib.h"
@@ -27,58 +29,79 @@ static bool play_track(Player *player, Playlist *playlist, size_t index,
     return true;
 }
 
+static size_t random_order_index(size_t upper_bound, void *context)
+{
+    (void)context;
+
+    if (upper_bound < 2) return 0;
+
+    int maximum =
+        upper_bound > (size_t)INT_MAX ? INT_MAX : (int)upper_bound - 1;
+    return (size_t)GetRandomValue(0, maximum) % upper_bound;
+}
+
+static bool reset_playback_order(Playback_Order *order,
+                                 const Playlist *playlist, bool shuffled)
+{
+    if (playback_order_reset(order, playlist_get_count(playlist),
+                             playlist_get_current(playlist), shuffled,
+                             random_order_index, NULL)) {
+        return true;
+    }
+
+    mp_log(ERROR, "Failed to update playback order");
+    return false;
+}
+
+static bool select_track(Player *player, Playlist *playlist,
+                         Playback_Order *order, size_t index,
+                         Track_Metadata *metadata)
+{
+    if (!play_track(player, playlist, index, metadata)) return false;
+
+    if (!playback_order_select(order, index, random_order_index, NULL)) {
+        mp_log(ERROR, "Failed to select track in playback order");
+        return false;
+    }
+
+    return true;
+}
+
 static bool play_next_track(Player *player, Playlist *playlist,
+                            Playback_Order *order, bool repeat_all,
                             Track_Metadata *metadata)
 {
     size_t count = playlist_get_count(playlist);
-    size_t index = playlist_get_current(playlist) + 1;
 
-    while (index < count) {
-        if (play_track(player, playlist, index, metadata)) {
-            return true;
+    for (size_t attempt = 0; attempt < count; ++attempt) {
+        size_t index;
+
+        if (!playback_order_next(order, repeat_all, random_order_index, NULL,
+                                 &index)) {
+            return false;
         }
 
-        ++index;
+        if (play_track(player, playlist, index, metadata)) return true;
     }
 
     return false;
 }
 
 static bool play_previous_track(Player *player, Playlist *playlist,
+                                Playback_Order *order, bool repeat_all,
                                 Track_Metadata *metadata)
-{
-    size_t index = playlist_get_current(playlist);
-
-    while (index > 0) {
-        --index;
-
-        if (play_track(player, playlist, index, metadata)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool play_random_track(Player *player, Playlist *playlist,
-                              Track_Metadata *metadata)
 {
     size_t count = playlist_get_count(playlist);
 
-    if (count < 2) return false;
+    for (size_t attempt = 0; attempt < count; ++attempt) {
+        size_t index;
 
-    size_t current = playlist_get_current(playlist);
-    size_t offset = (size_t)GetRandomValue(1, (int)count - 1);
-    size_t first = (current + offset) % count;
-    size_t index = first;
-
-    do {
-        if (index != current && play_track(player, playlist, index, metadata)) {
-            return true;
+        if (!playback_order_previous(order, repeat_all, &index)) {
+            return false;
         }
 
-        index = (index + 1) % count;
-    } while (index != first);
+        if (play_track(player, playlist, index, metadata)) return true;
+    }
 
     return false;
 }
@@ -517,6 +540,9 @@ int main(int argc, char **argv)
     Playlist playlist;
     playlist_init(&playlist);
 
+    Playback_Order playback_order;
+    playback_order_init(&playback_order);
+
     const int w_width = 1000;
     const int w_height = 700;
 
@@ -539,6 +565,12 @@ int main(int argc, char **argv)
         if (!loaded) {
             playlist_uninit(&playlist);
         }
+    }
+
+    if (!reset_playback_order(&playback_order, &playlist, false)) {
+        playlist_uninit(&playlist);
+        player_uninit(&player);
+        return 1;
     }
 
     const Color background = {18, 18, 18, 255};
@@ -583,12 +615,19 @@ int main(int argc, char **argv)
                         }
                     }
 
+                    if (!reset_playback_order(&playback_order, &playlist,
+                                              shuffle_enabled)) {
+                        exit_code = 1;
+                    }
+
                     mp_log(INFO, "Added %u tracks to playlist",
                            dropped_files.count);
                 }
             }
 
             UnloadDroppedFiles(dropped_files);
+
+            if (exit_code != 0) break;
         }
 
         Player_State state = player_get_state(&player);
@@ -602,16 +641,10 @@ int main(int argc, char **argv)
                     continued =
                         play_track(&player, &playlist,
                                    playlist_get_current(&playlist), &metadata);
-                } else if (shuffle_enabled) {
-                    continued =
-                        play_random_track(&player, &playlist, &metadata);
                 } else {
-                    continued = play_next_track(&player, &playlist, &metadata);
-                }
-
-                if (!continued && repeat_mode == REPEAT_ALL &&
-                    playlist_get_count(&playlist) > 0) {
-                    continued = play_track(&player, &playlist, 0, &metadata);
+                    continued =
+                        play_next_track(&player, &playlist, &playback_order,
+                                        repeat_mode == REPEAT_ALL, &metadata);
                 }
 
                 if (continued) {
@@ -622,7 +655,6 @@ int main(int argc, char **argv)
             finished_handled = false;
         }
 
-        state = player_get_state(&player);
         Vector2 mouse = GetMousePosition();
         float mouse_wheel = GetMouseWheelMove();
         Ui_Layout layout =
@@ -680,7 +712,8 @@ int main(int argc, char **argv)
                 Rectangle item = playlist_item_bounds(&layout, visible_index);
 
                 if (button_pressed(item, mouse, true)) {
-                    if (play_track(&player, &playlist, index, &metadata)) {
+                    if (select_track(&player, &playlist, &playback_order, index,
+                                     &metadata)) {
                         finished_handled = false;
                     }
 
@@ -695,6 +728,7 @@ int main(int argc, char **argv)
         if (control_down && IsKeyPressed(KEY_DELETE)) {
             player_clear(&player);
             playlist_clear(&playlist);
+            reset_playback_order(&playback_order, &playlist, shuffle_enabled);
             playlist_scroll = 0;
             finished_handled = false;
             seek_dragging = false;
@@ -711,10 +745,17 @@ int main(int argc, char **argv)
             size_t remaining = playlist_get_count(&playlist);
             bool loaded = false;
 
+            if (!reset_playback_order(&playback_order, &playlist,
+                                      shuffle_enabled)) {
+                exit_code = 1;
+                break;
+            }
+
             for (size_t i = 0; i < remaining; ++i) {
                 size_t index = (removed_index + i) % remaining;
 
-                if (play_track(&player, &playlist, index, &metadata)) {
+                if (select_track(&player, &playlist, &playback_order, index,
+                                 &metadata)) {
                     loaded = true;
                     break;
                 }
@@ -731,7 +772,6 @@ int main(int argc, char **argv)
             mouse_over_playlist ||
             CheckCollisionPointRec(mouse, layout.playlist_toggle);
         state = player_get_state(&player);
-        size_t track_index = playlist_get_current(&playlist);
         bool has_track = state != PLAYER_STOPPED;
         bool controls_enabled = has_track && !sidebar_blocks_mouse;
         bool repeat_pressed =
@@ -757,36 +797,38 @@ int main(int argc, char **argv)
         }
 
         if (shuffle_pressed) {
-            shuffle_enabled = !shuffle_enabled;
+            bool enabled = !shuffle_enabled;
+
+            if (!playback_order_set_shuffled(
+                    &playback_order, playlist_get_current(&playlist), enabled,
+                    random_order_index, NULL)) {
+                mp_log(ERROR, "Failed to change shuffle mode");
+                exit_code = 1;
+                break;
+            }
+
+            shuffle_enabled = enabled;
             mp_log(INFO, "Shuffle: %s", shuffle_enabled ? "On" : "Off");
         }
 
-        bool can_wrap = repeat_mode == REPEAT_ALL && track_count > 1;
-        bool can_previous = has_track && (track_index > 0 || can_wrap);
+        bool repeat_all = repeat_mode == REPEAT_ALL;
+        bool can_previous = has_track && playback_order_can_previous(
+                                             &playback_order, repeat_all);
         bool can_next =
-            has_track && ((shuffle_enabled && track_count > 1) ||
-                          track_index + 1 < track_count || can_wrap);
+            has_track && playback_order_can_next(&playback_order, repeat_all);
 
         if ((IsKeyPressed(KEY_RIGHT) && can_next) ||
             button_pressed(layout.next_button, mouse,
                            can_next && !sidebar_blocks_mouse)) {
-            bool moved = shuffle_enabled
-                             ? play_random_track(&player, &playlist, &metadata)
-                             : play_next_track(&player, &playlist, &metadata);
-
-            if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
-                play_track(&player, &playlist, 0, &metadata);
-            }
+            play_next_track(&player, &playlist, &playback_order, repeat_all,
+                            &metadata);
         }
 
         if ((IsKeyPressed(KEY_LEFT) && can_previous) ||
             button_pressed(layout.previous_button, mouse,
                            can_previous && !sidebar_blocks_mouse)) {
-            bool moved = play_previous_track(&player, &playlist, &metadata);
-
-            if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
-                play_track(&player, &playlist, track_count - 1, &metadata);
-            }
+            play_previous_track(&player, &playlist, &playback_order, repeat_all,
+                                &metadata);
         }
 
         bool toggle_requested =
@@ -1012,6 +1054,7 @@ int main(int argc, char **argv)
     CloseWindow();
 
     playlist_uninit(&playlist);
+    playback_order_uninit(&playback_order);
     player_uninit(&player);
 
     return exit_code;
