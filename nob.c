@@ -432,6 +432,64 @@ static bool build_app(Link_Mode mode)
     return result;
 }
 
+static bool run_tests(void)
+{
+    const char *test_inputs[] = {
+        "tests/test.c",   "src/metadata.h", "src/playback_order.h",
+        "src/playlist.h", "nob.c",
+    };
+
+    int rebuild = needs_rebuild("build/cache/test.o", test_inputs,
+                                ARRAY_LEN(test_inputs));
+
+    if (rebuild < 0) return false;
+
+    Cmd cmd = {0};
+
+    if (rebuild > 0) {
+        cmd_append(&cmd, "cc", "-c", "tests/test.c", "-o", "build/cache/test.o",
+                   "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic",
+                   "-Werror", "-I", "src");
+
+        if (!cmd_run(&cmd)) {
+            cmd_free(cmd);
+            return false;
+        }
+    }
+
+    const char *link_inputs[] = {
+        "build/cache/test.o",     "build/cache/log.o",
+        "build/cache/metadata.o", "build/cache/playback_order.o",
+        "build/cache/playlist.o", "nob.c",
+    };
+
+    rebuild = needs_rebuild("build/cache/mp-tests", link_inputs,
+                            ARRAY_LEN(link_inputs));
+
+    if (rebuild < 0) {
+        cmd_free(cmd);
+        return false;
+    }
+
+    if (rebuild > 0) {
+        cmd_append(&cmd, "cc", "-o", "build/cache/mp-tests",
+                   "build/cache/test.o", "build/cache/log.o",
+                   "build/cache/metadata.o", "build/cache/playback_order.o",
+                   "build/cache/playlist.o");
+
+        if (!cmd_run(&cmd)) {
+            cmd_free(cmd);
+            return false;
+        }
+    }
+
+    cmd_append(&cmd, "./build/cache/mp-tests");
+    bool result = cmd_run(&cmd);
+    cmd_free(cmd);
+
+    return result;
+}
+
 static bool run_app(int argc, char **argv)
 {
     Cmd cmd = {0};
@@ -455,6 +513,7 @@ int main(int argc, char **argv)
 
     Link_Mode mode = LINK_DYNAMIC;
     bool should_run = false;
+    bool should_test = false;
 
     if (argc > 0) {
         const char *argument = shift(argv, argc);
@@ -468,20 +527,31 @@ int main(int argc, char **argv)
                 shift(argv, argc);
                 mode = LINK_STATIC;
             }
+        } else if (strcmp(argument, "test") == 0) {
+            should_test = true;
         } else {
             nob_log(ERROR, "Unknown subcommand: %s", argument);
-            nob_log(INFO, "Usage: ./nob [static|run [static]]");
+            nob_log(INFO, "Usage: ./nob [static|test|run [static]]");
             return 1;
         }
     }
 
-    if (!should_run && argc > 0) {
+    if ((!should_run || should_test) && argc > 0) {
         nob_log(ERROR, "Unexpected argument: %s", shift(argv, argc));
         return 1;
     }
 
     if (!mkdir_if_not_exists("build")) return 1;
     if (!mkdir_if_not_exists("build/cache")) return 1;
+
+    if (should_test) {
+        if (!build_log()) return 1;
+        if (!build_metadata()) return 1;
+        if (!build_playback_order()) return 1;
+        if (!build_playlist()) return 1;
+        return run_tests() ? 0 : 1;
+    }
+
     if (!build_raylib(mode)) return 1;
     if (!build_miniaudio()) return 1;
     if (!build_nanosvg()) return 1;
