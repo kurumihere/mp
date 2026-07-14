@@ -90,3 +90,7 @@ Run the core playback-order, playlist, M3U, and metadata checks with:
 ```sh
 ./nob test
 ```
+
+## License
+
+This project is available under the [MIT License](LICENSE).
