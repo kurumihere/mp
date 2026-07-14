@@ -4,6 +4,7 @@
 #include "player.h"
 #include "playlist.h"
 #include "raylib.h"
+#include "svg.h"
 
 static bool play_track(Player *player, Playlist *playlist, size_t index,
                        char *file_name, size_t file_name_size)
@@ -51,6 +52,30 @@ static bool play_previous_track(Player *player, Playlist *playlist,
     return false;
 }
 
+static bool play_random_track(Player *player, Playlist *playlist,
+                              char *file_name, size_t file_name_size)
+{
+    size_t count = playlist_get_count(playlist);
+
+    if (count < 2) return false;
+
+    size_t current = playlist_get_current(playlist);
+    size_t offset = (size_t)GetRandomValue(1, (int)count - 1);
+    size_t first = (current + offset) % count;
+    size_t index = first;
+
+    do {
+        if (index != current &&
+            play_track(player, playlist, index, file_name, file_name_size)) {
+            return true;
+        }
+
+        index = (index + 1) % count;
+    } while (index != first);
+
+    return false;
+}
+
 static bool button_pressed(Rectangle bounds, Vector2 mouse, bool enabled)
 {
     return enabled && CheckCollisionPointRec(mouse, bounds) &&
@@ -62,7 +87,30 @@ typedef enum {
     BUTTON_PLAY,
     BUTTON_PAUSE,
     BUTTON_NEXT,
+    BUTTON_REPEAT,
+    BUTTON_REPEAT_ONE,
+    BUTTON_SHUFFLE,
 } Button_Icon;
+
+typedef enum {
+    REPEAT_OFF,
+    REPEAT_ALL,
+    REPEAT_ONE,
+} Repeat_Mode;
+
+typedef struct {
+    Texture2D back;
+    Texture2D forward;
+    Texture2D pause;
+    Texture2D play;
+    Texture2D repeat;
+    Texture2D repeat_one;
+    Texture2D shuffle;
+    Texture2D playlist_back;
+    Texture2D playlist_forward;
+    int button_size;
+    int toggle_size;
+} Ui_Icons;
 
 typedef struct {
     float scale;
@@ -80,11 +128,79 @@ typedef struct {
     Rectangle previous_button;
     Rectangle play_button;
     Rectangle next_button;
+    Rectangle repeat_button;
+    Rectangle shuffle_button;
     Rectangle progress_bar;
     Rectangle progress_hitbox;
     Rectangle playlist_panel;
     Rectangle playlist_toggle;
 } Ui_Layout;
+
+static void unload_ui_icons(Ui_Icons *icons)
+{
+    Texture2D *textures[] = {
+        &icons->back,    &icons->forward,       &icons->pause,
+        &icons->play,    &icons->repeat,        &icons->repeat_one,
+        &icons->shuffle, &icons->playlist_back, &icons->playlist_forward,
+    };
+
+    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
+        if (IsTextureValid(*textures[i])) UnloadTexture(*textures[i]);
+    }
+
+    *icons = (Ui_Icons){0};
+}
+
+static bool create_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
+{
+    *icons = (Ui_Icons){
+        .back = svg_load_texture("assets/back.svg", button_size, 0.74f),
+        .forward = svg_load_texture("assets/forward.svg", button_size, 0.74f),
+        .pause = svg_load_texture("assets/pause.svg", button_size, 0.72f),
+        .play = svg_load_texture("assets/play.svg", button_size, 0.72f),
+        .repeat = svg_load_texture("assets/repeat.svg", button_size, 0.68f),
+        .repeat_one =
+            svg_load_texture("assets/repeat-one.svg", button_size, 0.68f),
+        .shuffle = svg_load_texture("assets/shuffle.svg", button_size, 0.68f),
+        .playlist_back =
+            svg_load_texture("assets/back.svg", toggle_size, 0.88f),
+        .playlist_forward =
+            svg_load_texture("assets/forward.svg", toggle_size, 0.88f),
+        .button_size = button_size,
+        .toggle_size = toggle_size,
+    };
+
+    Texture2D textures[] = {
+        icons->back,    icons->forward,       icons->pause,
+        icons->play,    icons->repeat,        icons->repeat_one,
+        icons->shuffle, icons->playlist_back, icons->playlist_forward,
+    };
+
+    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
+        if (!IsTextureValid(textures[i])) {
+            unload_ui_icons(icons);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool update_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
+{
+    if (icons->button_size == button_size &&
+        icons->toggle_size == toggle_size) {
+        return true;
+    }
+
+    Ui_Icons replacement;
+
+    if (!create_ui_icons(&replacement, button_size, toggle_size)) return false;
+
+    unload_ui_icons(icons);
+    *icons = replacement;
+    return true;
+}
 
 static float clamp_float(float value, float minimum, float maximum)
 {
@@ -123,7 +239,9 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         clamp_float(420.0f * scale, 240.0f, (float)height - padding * 2.0f);
     float toggle_width = clamp_float(32.0f * scale, 24.0f, 48.0f);
     float toggle_height = clamp_float(72.0f * scale, 52.0f, 108.0f);
-    float next_x = (float)width - padding - button_size;
+    float shuffle_x = (float)width - padding - button_size;
+    float repeat_x = shuffle_x - gap - button_size;
+    float next_x = repeat_x - gap - button_size;
     float play_x = next_x - gap - button_size;
     float previous_x = play_x - gap - button_size;
     float panel_x = (float)width - panel_width;
@@ -149,6 +267,8 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .previous_button = {previous_x, controls_y, button_size, button_size},
         .play_button = {play_x, controls_y, button_size, button_size},
         .next_button = {next_x, controls_y, button_size, button_size},
+        .repeat_button = {repeat_x, controls_y, button_size, button_size},
+        .shuffle_button = {shuffle_x, controls_y, button_size, button_size},
         .progress_bar =
             {
                 padding,
@@ -201,63 +321,57 @@ static Rectangle playlist_item_bounds(const Ui_Layout *layout,
     };
 }
 
-static void draw_button(Rectangle bounds, Button_Icon icon, Vector2 mouse,
-                        bool enabled)
+static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
+{
+    float size = bounds.width;
+    Rectangle source = {0.0f, 0.0f, (float)texture.width,
+                        (float)texture.height};
+    Rectangle destination = {bounds.x + bounds.width / 2.0f,
+                             bounds.y + bounds.height / 2.0f, size, size};
+    Vector2 origin = {size / 2.0f, size / 2.0f};
+
+    DrawTexturePro(texture, source, destination, origin, 0.0f, tint);
+}
+
+static void draw_button(Rectangle bounds, Button_Icon icon,
+                        const Ui_Icons *icons, Vector2 mouse, bool enabled,
+                        bool active)
 {
     bool hovered = enabled && CheckCollisionPointRec(mouse, bounds);
     Color fill = enabled ? (Color){36, 36, 36, 255} : (Color){24, 24, 24, 255};
     Color icon_color = enabled ? RAYWHITE : DARKGRAY;
-    float center_x = bounds.x + bounds.width / 2.0f;
-    float center_y = bounds.y + bounds.height / 2.0f;
-    float icon_scale = bounds.width / 48.0f;
-    int thin_width = (int)clamp_float(3.0f * icon_scale, 2.0f, 5.0f);
-    int thick_width = (int)clamp_float(5.0f * icon_scale, 3.0f, 8.0f);
-    int icon_height = (int)(20.0f * icon_scale);
+    Texture2D texture = {0};
 
-    if (hovered) fill = (Color){58, 58, 58, 255};
+    if (active && enabled) fill = (Color){52, 52, 52, 255};
+    if (hovered) fill = (Color){68, 68, 68, 255};
 
     DrawRectangleRec(bounds, fill);
 
     switch (icon) {
     case BUTTON_PREVIOUS:
-        DrawRectangle((int)(center_x - 10.0f * icon_scale),
-                      (int)(center_y - 10.0f * icon_scale), thin_width,
-                      icon_height, icon_color);
-        DrawTriangle((Vector2){center_x - 5.0f * icon_scale, center_y},
-                     (Vector2){center_x + 8.0f * icon_scale,
-                               center_y + 10.0f * icon_scale},
-                     (Vector2){center_x + 8.0f * icon_scale,
-                               center_y - 10.0f * icon_scale},
-                     icon_color);
+        texture = icons->back;
         break;
     case BUTTON_PLAY:
-        DrawTriangle((Vector2){center_x - 7.0f * icon_scale,
-                               center_y - 10.0f * icon_scale},
-                     (Vector2){center_x - 7.0f * icon_scale,
-                               center_y + 10.0f * icon_scale},
-                     (Vector2){center_x + 9.0f * icon_scale, center_y},
-                     icon_color);
+        texture = icons->play;
         break;
     case BUTTON_PAUSE:
-        DrawRectangle((int)(center_x - 8.0f * icon_scale),
-                      (int)(center_y - 10.0f * icon_scale), thick_width,
-                      icon_height, icon_color);
-        DrawRectangle((int)(center_x + 3.0f * icon_scale),
-                      (int)(center_y - 10.0f * icon_scale), thick_width,
-                      icon_height, icon_color);
+        texture = icons->pause;
         break;
     case BUTTON_NEXT:
-        DrawTriangle((Vector2){center_x - 8.0f * icon_scale,
-                               center_y - 10.0f * icon_scale},
-                     (Vector2){center_x - 8.0f * icon_scale,
-                               center_y + 10.0f * icon_scale},
-                     (Vector2){center_x + 5.0f * icon_scale, center_y},
-                     icon_color);
-        DrawRectangle((int)(center_x + 7.0f * icon_scale),
-                      (int)(center_y - 10.0f * icon_scale), thin_width,
-                      icon_height, icon_color);
+        texture = icons->forward;
+        break;
+    case BUTTON_REPEAT:
+        texture = icons->repeat;
+        break;
+    case BUTTON_REPEAT_ONE:
+        texture = icons->repeat_one;
+        break;
+    case BUTTON_SHUFFLE:
+        texture = icons->shuffle;
         break;
     }
+
+    draw_texture_icon(texture, bounds, icon_color);
 }
 
 static void draw_playlist_panel(const Playlist *playlist,
@@ -314,36 +428,15 @@ static void draw_playlist_panel(const Playlist *playlist,
     }
 }
 
-static void draw_playlist_toggle(Rectangle bounds, bool open, Vector2 mouse)
+static void draw_playlist_toggle(Rectangle bounds, bool open,
+                                 const Ui_Icons *icons, Vector2 mouse)
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
     Color fill = hovered ? (Color){58, 58, 58, 255} : (Color){36, 36, 36, 255};
-    Color icon_color = RAYWHITE;
-    float center_x = bounds.x + bounds.width / 2.0f;
-    float center_y = bounds.y + bounds.height / 2.0f;
-    float icon_scale = bounds.width / 32.0f;
 
     DrawRectangleRec(bounds, fill);
-
-    if (open) {
-        DrawLineEx((Vector2){center_x - 5.0f * icon_scale,
-                             center_y - 10.0f * icon_scale},
-                   (Vector2){center_x + 5.0f * icon_scale, center_y},
-                   3.0f * icon_scale, icon_color);
-        DrawLineEx((Vector2){center_x + 5.0f * icon_scale, center_y},
-                   (Vector2){center_x - 5.0f * icon_scale,
-                             center_y + 10.0f * icon_scale},
-                   3.0f * icon_scale, icon_color);
-    } else {
-        DrawLineEx((Vector2){center_x + 5.0f * icon_scale,
-                             center_y - 10.0f * icon_scale},
-                   (Vector2){center_x - 5.0f * icon_scale, center_y},
-                   3.0f * icon_scale, icon_color);
-        DrawLineEx((Vector2){center_x - 5.0f * icon_scale, center_y},
-                   (Vector2){center_x + 5.0f * icon_scale,
-                             center_y + 10.0f * icon_scale},
-                   3.0f * icon_scale, icon_color);
-    }
+    draw_texture_icon(open ? icons->playlist_back : icons->playlist_forward,
+                      bounds, RAYWHITE);
 }
 
 int main(int argc, char **argv)
@@ -393,6 +486,9 @@ int main(int argc, char **argv)
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(w_width, w_height, window_title);
+
+    Ui_Icons icons = {0};
+
     SetWindowMinSize(480, 320);
     SetTextureFilter(GetFontDefault().texture, TEXTURE_FILTER_POINT);
     SetTargetFPS(60);
@@ -402,6 +498,8 @@ int main(int argc, char **argv)
     bool playlist_open = false;
     bool finished_handled = false;
     bool seek_dragging = false;
+    Repeat_Mode repeat_mode = REPEAT_OFF;
+    bool shuffle_enabled = false;
 
     while (!WindowShouldClose()) {
         if (IsFileDropped()) {
@@ -445,9 +543,27 @@ int main(int argc, char **argv)
         if (state == PLAYER_FINISHED) {
             if (!finished_handled) {
                 finished_handled = true;
+                bool continued = false;
 
-                if (play_next_track(&player, &playlist, file_name,
-                                    sizeof(file_name))) {
+                if (repeat_mode == REPEAT_ONE) {
+                    continued = play_track(&player, &playlist,
+                                           playlist_get_current(&playlist),
+                                           file_name, sizeof(file_name));
+                } else if (shuffle_enabled) {
+                    continued = play_random_track(&player, &playlist, file_name,
+                                                  sizeof(file_name));
+                } else {
+                    continued = play_next_track(&player, &playlist, file_name,
+                                                sizeof(file_name));
+                }
+
+                if (!continued && repeat_mode == REPEAT_ALL &&
+                    playlist_get_count(&playlist) > 0) {
+                    continued = play_track(&player, &playlist, 0, file_name,
+                                           sizeof(file_name));
+                }
+
+                if (continued) {
                     finished_handled = false;
                 }
             }
@@ -468,6 +584,14 @@ int main(int argc, char **argv)
             playlist_open = !playlist_open;
             layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
                                     playlist_open);
+        }
+
+        int button_icon_size = (int)(layout.play_button.width + 0.5f);
+        int toggle_icon_size = (int)(layout.playlist_toggle.width + 0.5f);
+
+        if (!update_ui_icons(&icons, button_icon_size, toggle_icon_size)) {
+            exit_code = 1;
+            break;
         }
 
         size_t track_count = playlist_get_count(&playlist);
@@ -521,20 +645,64 @@ int main(int argc, char **argv)
         state = player_get_state(&player);
         size_t track_index = playlist_get_current(&playlist);
         bool has_track = state != PLAYER_STOPPED;
-        bool can_previous = has_track && track_index > 0;
-        bool can_next = has_track && track_index + 1 < track_count;
+        bool controls_enabled = has_track && !sidebar_blocks_mouse;
+        bool repeat_pressed =
+            button_pressed(layout.repeat_button, mouse, controls_enabled);
+        bool shuffle_pressed =
+            button_pressed(layout.shuffle_button, mouse, controls_enabled);
 
-        if (IsKeyPressed(KEY_RIGHT) ||
-            button_pressed(layout.next_button, mouse,
-                           can_next && !sidebar_blocks_mouse)) {
-            play_next_track(&player, &playlist, file_name, sizeof(file_name));
+        if (repeat_pressed) {
+            switch (repeat_mode) {
+            case REPEAT_OFF:
+                repeat_mode = REPEAT_ALL;
+                mp_log(INFO, "Repeat mode: All");
+                break;
+            case REPEAT_ALL:
+                repeat_mode = REPEAT_ONE;
+                mp_log(INFO, "Repeat mode: One");
+                break;
+            case REPEAT_ONE:
+                repeat_mode = REPEAT_OFF;
+                mp_log(INFO, "Repeat mode: Off");
+                break;
+            }
         }
 
-        if (IsKeyPressed(KEY_LEFT) ||
+        if (shuffle_pressed) {
+            shuffle_enabled = !shuffle_enabled;
+            mp_log(INFO, "Shuffle: %s", shuffle_enabled ? "On" : "Off");
+        }
+
+        bool can_wrap = repeat_mode == REPEAT_ALL && track_count > 1;
+        bool can_previous = has_track && (track_index > 0 || can_wrap);
+        bool can_next =
+            has_track && ((shuffle_enabled && track_count > 1) ||
+                          track_index + 1 < track_count || can_wrap);
+
+        if ((IsKeyPressed(KEY_RIGHT) && can_next) ||
+            button_pressed(layout.next_button, mouse,
+                           can_next && !sidebar_blocks_mouse)) {
+            bool moved = shuffle_enabled
+                             ? play_random_track(&player, &playlist, file_name,
+                                                 sizeof(file_name))
+                             : play_next_track(&player, &playlist, file_name,
+                                               sizeof(file_name));
+
+            if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
+                play_track(&player, &playlist, 0, file_name, sizeof(file_name));
+            }
+        }
+
+        if ((IsKeyPressed(KEY_LEFT) && can_previous) ||
             button_pressed(layout.previous_button, mouse,
                            can_previous && !sidebar_blocks_mouse)) {
-            play_previous_track(&player, &playlist, file_name,
-                                sizeof(file_name));
+            bool moved = play_previous_track(&player, &playlist, file_name,
+                                             sizeof(file_name));
+
+            if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
+                play_track(&player, &playlist, track_count - 1, file_name,
+                           sizeof(file_name));
+            }
         }
 
         bool toggle_requested =
@@ -716,23 +884,32 @@ int main(int argc, char **argv)
                         progress_hovered ? progress_hover
                                          : progress_foreground);
 
-            draw_button(layout.previous_button, BUTTON_PREVIOUS, mouse,
-                        can_previous);
+            draw_button(layout.previous_button, BUTTON_PREVIOUS, &icons, mouse,
+                        can_previous, false);
             draw_button(layout.play_button,
                         state == PLAYER_PLAYING ? BUTTON_PAUSE : BUTTON_PLAY,
-                        mouse, true);
-            draw_button(layout.next_button, BUTTON_NEXT, mouse, can_next);
+                        &icons, mouse, true, false);
+            draw_button(layout.next_button, BUTTON_NEXT, &icons, mouse,
+                        can_next, false);
+            draw_button(layout.repeat_button,
+                        repeat_mode == REPEAT_ONE ? BUTTON_REPEAT_ONE
+                                                  : BUTTON_REPEAT,
+                        &icons, mouse, true, repeat_mode != REPEAT_OFF);
+            draw_button(layout.shuffle_button, BUTTON_SHUFFLE, &icons, mouse,
+                        true, shuffle_enabled);
         }
 
         if (playlist_open) {
             draw_playlist_panel(&playlist, &layout, mouse, playlist_scroll);
         }
 
-        draw_playlist_toggle(layout.playlist_toggle, playlist_open, mouse);
+        draw_playlist_toggle(layout.playlist_toggle, playlist_open, &icons,
+                             mouse);
 
         EndDrawing();
     }
 
+    unload_ui_icons(&icons);
     CloseWindow();
 
     playlist_uninit(&playlist);
