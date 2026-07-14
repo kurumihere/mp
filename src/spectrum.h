@@ -8,6 +8,7 @@
 
 typedef struct {
     float levels[SPECTRUM_MAX_BARS];
+    float velocities[SPECTRUM_MAX_BARS];
     float window[SPECTRUM_SAMPLE_COUNT];
     float cos_table[SPECTRUM_SAMPLE_COUNT / 2];
     float sin_table[SPECTRUM_SAMPLE_COUNT / 2];

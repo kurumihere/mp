@@ -13,6 +13,32 @@ static float clamp_float(float value, float minimum, float maximum)
     return value;
 }
 
+static float smooth_level(float current, float target, float *velocity,
+                          float delta_time)
+{
+    const float smooth_time = 0.08f;
+    float frequency = 2.0f / smooth_time;
+    float step = frequency * delta_time;
+    float decay = 1.0f / (1.0f + step + 0.48f * step * step +
+                          0.235f * step * step * step);
+    float difference = current - target;
+    float movement = (*velocity + frequency * difference) * delta_time;
+
+    *velocity = (*velocity - frequency * movement) * decay;
+
+    float result = target + (difference + movement) * decay;
+
+    if (result < 0.0f) {
+        result = 0.0f;
+        if (*velocity < 0.0f) *velocity = 0.0f;
+    } else if (result > 1.0f) {
+        result = 1.0f;
+        if (*velocity > 0.0f) *velocity = 0.0f;
+    }
+
+    return result;
+}
+
 static void fft(float real[SPECTRUM_SAMPLE_COUNT],
                 float imaginary[SPECTRUM_SAMPLE_COUNT],
                 const Spectrum *spectrum)
@@ -85,6 +111,7 @@ void spectrum_init(Spectrum *spectrum)
 void spectrum_reset(Spectrum *spectrum)
 {
     memset(spectrum->levels, 0, sizeof(spectrum->levels));
+    memset(spectrum->velocities, 0, sizeof(spectrum->velocities));
     spectrum->bar_count = 0;
 }
 
@@ -97,6 +124,7 @@ void spectrum_update(Spectrum *spectrum,
 
     if (bar_count != spectrum->bar_count) {
         memset(spectrum->levels, 0, sizeof(spectrum->levels));
+        memset(spectrum->velocities, 0, sizeof(spectrum->velocities));
         spectrum->bar_count = bar_count;
     }
 
@@ -119,9 +147,8 @@ void spectrum_update(Spectrum *spectrum,
     if (maximum_frequency <= minimum_frequency) return;
 
     float frequency_range = maximum_frequency / minimum_frequency;
-    float frame_time = clamp_float(delta_time, 0.0f, 0.25f);
-    float attack = 1.0f - expf(-8.0f * frame_time);
-    float release = 1.0f - expf(-4.0f * frame_time);
+    float frame_time = clamp_float(delta_time, 0.0f, 0.05f);
+    float targets[SPECTRUM_MAX_BARS] = {0};
 
     for (size_t bar = 0; bar < bar_count; ++bar) {
         float lower_fraction = (float)bar / (float)bar_count;
@@ -153,14 +180,39 @@ void spectrum_update(Spectrum *spectrum,
 
         float decibels = 20.0f * log10f(magnitude + 0.0000001f);
         float high_frequency_boost = lower_fraction * 12.0f;
-        float target = clamp_float(
+        targets[bar] = clamp_float(
             (decibels + high_frequency_boost + 65.0f) / 60.0f, 0.0f, 1.0f);
-        float smoothing = target > spectrum->levels[bar] ? attack : release;
+    }
 
-        spectrum->levels[bar] += (target - spectrum->levels[bar]) * smoothing;
+    for (size_t bar = 0; bar < bar_count; ++bar) {
+        float target = targets[bar] * 4.0f;
+        float weight = 4.0f;
+
+        if (bar > 0) {
+            target += targets[bar - 1];
+            weight += 1.0f;
+        }
+
+        if (bar + 1 < bar_count) {
+            target += targets[bar + 1];
+            weight += 1.0f;
+        }
+
+        target /= weight;
+
+        spectrum->levels[bar] =
+            smooth_level(spectrum->levels[bar], target,
+                         &spectrum->velocities[bar], frame_time);
+
+        if (target == 0.0f && spectrum->levels[bar] < 0.001f &&
+            fabsf(spectrum->velocities[bar]) < 0.01f) {
+            spectrum->levels[bar] = 0.0f;
+            spectrum->velocities[bar] = 0.0f;
+        }
     }
 
     for (size_t bar = bar_count; bar < SPECTRUM_MAX_BARS; ++bar) {
         spectrum->levels[bar] = 0.0f;
+        spectrum->velocities[bar] = 0.0f;
     }
 }

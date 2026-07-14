@@ -520,15 +520,14 @@ static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
         float height = level * available_height;
         float x = snap_pixel(start_x + (bar_width + bar_gap) * (float)bar);
 
-        if (level < 0.01f) continue;
-        if (height < 1.0f) height = 1.0f;
+        if (level <= 0.0f) continue;
 
-        Rectangle column = snap_rectangle((Rectangle){
+        Rectangle column = {
             x,
             bottom - height,
             bar_width,
             height,
-        });
+        };
 
         DrawRectangleRec(column, bar_color);
     }

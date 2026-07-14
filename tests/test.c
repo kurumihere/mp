@@ -150,7 +150,19 @@ static void test_spectrum(void)
         samples[i] = 0.5f * sinf(phase);
     }
 
-    for (int frame = 0; frame < 20; ++frame) {
+    spectrum_update(&spectrum, samples, sample_rate, bar_count, 1.0f / 60.0f);
+
+    float first_frame_peak = 0.0f;
+
+    for (size_t i = 0; i < bar_count; ++i) {
+        if (spectrum.levels[i] > first_frame_peak) {
+            first_frame_peak = spectrum.levels[i];
+        }
+    }
+
+    CHECK(first_frame_peak > 0.0f && first_frame_peak < 0.2f);
+
+    for (int frame = 1; frame < 20; ++frame) {
         spectrum_update(&spectrum, samples, sample_rate, bar_count,
                         1.0f / 60.0f);
     }
