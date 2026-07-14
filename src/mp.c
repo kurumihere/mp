@@ -10,6 +10,8 @@
 #include "raylib.h"
 #include "svg.h"
 
+#define ASSET_PATH_SIZE 4096
+
 static bool play_track(Player *player, Playlist *playlist, size_t index,
                        Track_Metadata *metadata)
 {
@@ -224,21 +226,82 @@ static void unload_ui_icons(Ui_Icons *icons)
     *icons = (Ui_Icons){0};
 }
 
-static bool create_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
+static bool make_asset_path(char *path, size_t capacity, const char *directory,
+                            const char *name)
+{
+    int written = snprintf(path, capacity, "%s/%s", directory, name);
+
+    return written >= 0 && (size_t)written < capacity;
+}
+
+static bool asset_directory_valid(const char *directory)
+{
+    char path[ASSET_PATH_SIZE];
+
+    return make_asset_path(path, sizeof(path), directory, "play.svg") &&
+           FileExists(path);
+}
+
+static bool resolve_asset_directory(char *directory, size_t capacity)
+{
+    if (asset_directory_valid("assets")) {
+        int written = snprintf(directory, capacity, "assets");
+        return written >= 0 && (size_t)written < capacity;
+    }
+
+    const char *application_directory = GetApplicationDirectory();
+    const char *relative_directories[] = {"assets", "../assets"};
+
+    for (size_t i = 0;
+         i < sizeof(relative_directories) / sizeof(relative_directories[0]);
+         ++i) {
+        int written = snprintf(directory, capacity, "%s%s",
+                               application_directory, relative_directories[i]);
+
+        if (written >= 0 && (size_t)written < capacity &&
+            asset_directory_valid(directory)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static Texture2D load_asset_texture(const char *directory, const char *name,
+                                    int size, float content_scale)
+{
+    char path[ASSET_PATH_SIZE];
+
+    if (!make_asset_path(path, sizeof(path), directory, name)) {
+        mp_log(ERROR, "Asset path is too long: %s", name);
+        return (Texture2D){0};
+    }
+
+    return svg_load_texture(path, size, content_scale);
+}
+
+static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory,
+                            int button_size, int toggle_size)
 {
     *icons = (Ui_Icons){
-        .back = svg_load_texture("assets/back.svg", button_size, 0.74f),
-        .forward = svg_load_texture("assets/forward.svg", button_size, 0.74f),
-        .pause = svg_load_texture("assets/pause.svg", button_size, 0.72f),
-        .play = svg_load_texture("assets/play.svg", button_size, 0.72f),
-        .repeat = svg_load_texture("assets/repeat.svg", button_size, 0.68f),
-        .repeat_one =
-            svg_load_texture("assets/repeat-one.svg", button_size, 0.68f),
-        .shuffle = svg_load_texture("assets/shuffle.svg", button_size, 0.68f),
+        .back =
+            load_asset_texture(asset_directory, "back.svg", button_size, 0.74f),
+        .forward = load_asset_texture(asset_directory, "forward.svg",
+                                      button_size, 0.74f),
+        .pause = load_asset_texture(asset_directory, "pause.svg", button_size,
+                                    0.72f),
+        .play =
+            load_asset_texture(asset_directory, "play.svg", button_size, 0.72f),
+        .repeat = load_asset_texture(asset_directory, "repeat.svg", button_size,
+                                     0.68f),
+        .repeat_one = load_asset_texture(asset_directory, "repeat-one.svg",
+                                         button_size, 0.68f),
+        .shuffle = load_asset_texture(asset_directory, "shuffle.svg",
+                                      button_size, 0.68f),
         .playlist_back =
-            svg_load_texture("assets/back.svg", toggle_size, 0.88f),
-        .playlist_forward =
-            svg_load_texture("assets/forward.svg", toggle_size, 0.88f),
+            load_asset_texture(asset_directory, "back.svg", toggle_size, 0.88f),
+        .playlist_forward = load_asset_texture(asset_directory, "forward.svg",
+                                               toggle_size, 0.88f),
         .button_size = button_size,
         .toggle_size = toggle_size,
     };
@@ -259,7 +322,8 @@ static bool create_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
     return true;
 }
 
-static bool update_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
+static bool update_ui_icons(Ui_Icons *icons, const char *asset_directory,
+                            int button_size, int toggle_size)
 {
     if (icons->button_size == button_size &&
         icons->toggle_size == toggle_size) {
@@ -268,7 +332,10 @@ static bool update_ui_icons(Ui_Icons *icons, int button_size, int toggle_size)
 
     Ui_Icons replacement;
 
-    if (!create_ui_icons(&replacement, button_size, toggle_size)) return false;
+    if (!create_ui_icons(&replacement, asset_directory, button_size,
+                         toggle_size)) {
+        return false;
+    }
 
     unload_ui_icons(icons);
     *icons = replacement;
@@ -626,6 +693,16 @@ int main(int argc, char **argv)
     InitWindow(w_width, w_height, window_title);
 
     Ui_Icons icons = {0};
+    char asset_directory[ASSET_PATH_SIZE];
+
+    if (!resolve_asset_directory(asset_directory, sizeof(asset_directory))) {
+        mp_log(ERROR, "Failed to locate application assets");
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
 
     SetWindowMinSize(480, 320);
     SetTextureFilter(GetFontDefault().texture, TEXTURE_FILTER_POINT);
@@ -716,7 +793,8 @@ int main(int argc, char **argv)
         int button_icon_size = (int)(layout.play_button.width + 0.5f);
         int toggle_icon_size = (int)(layout.playlist_toggle.width + 0.5f);
 
-        if (!update_ui_icons(&icons, button_icon_size, toggle_icon_size)) {
+        if (!update_ui_icons(&icons, asset_directory, button_icon_size,
+                             toggle_icon_size)) {
             exit_code = 1;
             break;
         }
