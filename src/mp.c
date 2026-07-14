@@ -401,6 +401,7 @@ int main(int argc, char **argv)
     int playlist_scroll = 0;
     bool playlist_open = false;
     bool finished_handled = false;
+    bool seek_dragging = false;
 
     while (!WindowShouldClose()) {
         if (IsFileDropped()) {
@@ -565,7 +566,15 @@ int main(int argc, char **argv)
             CheckCollisionPointRec(mouse, layout.progress_hitbox);
 
         if (!sidebar_blocks_mouse && progress_hovered &&
-            IsMouseButtonDown(MOUSE_BUTTON_LEFT) && length > 0.0f) {
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            seek_dragging = true;
+        }
+
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            seek_dragging = false;
+        }
+
+        if (seek_dragging && length > 0.0f) {
             float progress =
                 (mouse.x - layout.progress_bar.x) / layout.progress_bar.width;
 
