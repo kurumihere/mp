@@ -887,7 +887,7 @@ int main(int argc, char **argv)
 
         char time_text[64];
 
-        snprintf(time_text, sizeof(time_text), "%d:%02d / %d:%02d",
+        snprintf(time_text, sizeof(time_text), "%d:%02d | %d:%02d",
                  (int)cursor / 60, (int)cursor % 60, (int)length / 60,
                  (int)length % 60);
 
@@ -900,7 +900,7 @@ int main(int argc, char **argv)
 
         char playlist_text[64];
 
-        snprintf(playlist_text, sizeof(playlist_text), "%zu / %zu",
+        snprintf(playlist_text, sizeof(playlist_text), "%zu | %zu",
                  playlist_get_current(&playlist) + 1,
                  playlist_get_count(&playlist));
 
@@ -910,7 +910,7 @@ int main(int argc, char **argv)
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
 
         if (metadata.artist[0] != '\0' && metadata.album[0] != '\0') {
-            snprintf(details_text, sizeof(details_text), "%s  /  %s",
+            snprintf(details_text, sizeof(details_text), "%s | %s",
                      metadata.artist, metadata.album);
         } else if (metadata.artist[0] != '\0') {
             snprintf(details_text, sizeof(details_text), "%s", metadata.artist);
