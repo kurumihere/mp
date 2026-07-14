@@ -294,6 +294,20 @@ static bool build_metadata(void)
     return result;
 }
 
+static bool install_executable(const char *source)
+{
+    const char *temporary = "build/mp.new";
+
+    if (!copy_file(source, temporary)) return false;
+
+    if (rename(temporary, "build/mp") != 0) {
+        nob_log(ERROR, "Could not replace build/mp: %s", strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
 static bool build_app(Link_Mode mode)
 {
     Cmd cmd = {0};
@@ -381,7 +395,7 @@ static bool build_app(Link_Mode mode)
         }
     }
 
-    bool result = copy_file(output, "build/mp");
+    bool result = install_executable(output);
     cmd_free(cmd);
 
     return result;
