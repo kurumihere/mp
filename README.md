@@ -18,9 +18,9 @@ icons.
 
 ## Requirements
 
-The current build targets Linux with X11 and OpenGL. A C99 compiler and the
-development libraries for OpenGL and X11 are required. raylib, miniaudio,
-NanoSVG, and the build helper are vendored in `thirdparty/`.
+The current build targets x86-64 Linux with X11 and OpenGL. A C99 compiler and
+the development libraries for OpenGL and X11 are required. Prebuilt raylib,
+miniaudio, NanoSVG, and the build helper are vendored in `thirdparty/`.
 
 ## Build
 
@@ -40,6 +40,14 @@ Build with raylib linked statically:
 
 ```sh
 ./nob static
+```
+
+The checked-in raylib libraries are prebuilt for x86-64 Linux. After changing
+the retained raylib sources or adding another built-in glyph table, rebuild
+both libraries with:
+
+```sh
+./nob raylib
 ```
 
 The executable is written to `build/mp`. The static configuration still uses

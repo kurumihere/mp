@@ -1,6 +1,6 @@
 CompileFlags:
   Add:
     - -std=c99
-    - -I../thirdparty/raylib/src
+    - -I../thirdparty/raylib/include
     - -I../thirdparty/miniaudio
     - -I../thirdparty/nanosvg
