@@ -1,32 +1,33 @@
 #include <stdio.h>
 
 #include "log.h"
+#include "metadata.h"
 #include "player.h"
 #include "playlist.h"
 #include "raylib.h"
 #include "svg.h"
 
 static bool play_track(Player *player, Playlist *playlist, size_t index,
-                       char *file_name, size_t file_name_size)
+                       Track_Metadata *metadata)
 {
     const char *path = playlist_get(playlist, index);
 
     if (path == NULL || !player_load(player, path)) return false;
 
     playlist_select(playlist, index);
-    snprintf(file_name, file_name_size, "%s", GetFileName(path));
+    metadata_load(path, metadata);
 
     return true;
 }
 
-static bool play_next_track(Player *player, Playlist *playlist, char *file_name,
-                            size_t file_name_size)
+static bool play_next_track(Player *player, Playlist *playlist,
+                            Track_Metadata *metadata)
 {
     size_t count = playlist_get_count(playlist);
     size_t index = playlist_get_current(playlist) + 1;
 
     while (index < count) {
-        if (play_track(player, playlist, index, file_name, file_name_size)) {
+        if (play_track(player, playlist, index, metadata)) {
             return true;
         }
 
@@ -37,14 +38,14 @@ static bool play_next_track(Player *player, Playlist *playlist, char *file_name,
 }
 
 static bool play_previous_track(Player *player, Playlist *playlist,
-                                char *file_name, size_t file_name_size)
+                                Track_Metadata *metadata)
 {
     size_t index = playlist_get_current(playlist);
 
     while (index > 0) {
         --index;
 
-        if (play_track(player, playlist, index, file_name, file_name_size)) {
+        if (play_track(player, playlist, index, metadata)) {
             return true;
         }
     }
@@ -53,7 +54,7 @@ static bool play_previous_track(Player *player, Playlist *playlist,
 }
 
 static bool play_random_track(Player *player, Playlist *playlist,
-                              char *file_name, size_t file_name_size)
+                              Track_Metadata *metadata)
 {
     size_t count = playlist_get_count(playlist);
 
@@ -65,8 +66,7 @@ static bool play_random_track(Player *player, Playlist *playlist,
     size_t index = first;
 
     do {
-        if (index != current &&
-            play_track(player, playlist, index, file_name, file_name_size)) {
+        if (index != current && play_track(player, playlist, index, metadata)) {
             return true;
         }
 
@@ -120,6 +120,7 @@ typedef struct {
     int status_size;
     float title_x;
     float title_y;
+    float details_y;
     float metadata_y;
     float playlist_top;
     float playlist_item_height;
@@ -259,7 +260,8 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .title_size = crisp_font_size(32.0f * scale, 20, 50),
         .status_size = crisp_font_size(18.0f * scale, 10, 30),
         .title_x = padding,
-        .title_y = controls_y - 100.0f * scale,
+        .title_y = controls_y - 128.0f * scale,
+        .details_y = controls_y - 82.0f * scale,
         .metadata_y = controls_y - 37.0f * scale,
         .playlist_top = panel_y + 64.0f * scale,
         .playlist_item_height = 42.0f * scale,
@@ -452,9 +454,7 @@ int main(int argc, char **argv)
     const int w_height = 700;
 
     const char *window_title = "Music Player";
-    char file_name[1024];
-
-    snprintf(file_name, sizeof(file_name), "Drop an audio file");
+    Track_Metadata metadata = {0};
 
     if (argc > 1) {
         bool loaded = false;
@@ -462,12 +462,7 @@ int main(int argc, char **argv)
         if (playlist_replace(&playlist, (const char *const *)&argv[1],
                              (size_t)(argc - 1))) {
             for (size_t i = 0; i < playlist_get_count(&playlist); ++i) {
-                const char *path = playlist_get(&playlist, i);
-
-                if (player_load(&player, path)) {
-                    playlist_select(&playlist, i);
-                    snprintf(file_name, sizeof(file_name), "%s",
-                             GetFileName(path));
+                if (play_track(&player, &playlist, i, &metadata)) {
                     loaded = true;
                     break;
                 }
@@ -514,8 +509,7 @@ int main(int argc, char **argv)
                     if (player_get_state(&player) == PLAYER_STOPPED) {
                         for (size_t i = first_new_track;
                              i < playlist_get_count(&playlist); ++i) {
-                            if (play_track(&player, &playlist, i, file_name,
-                                           sizeof(file_name))) {
+                            if (play_track(&player, &playlist, i, &metadata)) {
                                 finished_handled = false;
                                 break;
                             }
@@ -538,21 +532,19 @@ int main(int argc, char **argv)
                 bool continued = false;
 
                 if (repeat_mode == REPEAT_ONE) {
-                    continued = play_track(&player, &playlist,
-                                           playlist_get_current(&playlist),
-                                           file_name, sizeof(file_name));
+                    continued =
+                        play_track(&player, &playlist,
+                                   playlist_get_current(&playlist), &metadata);
                 } else if (shuffle_enabled) {
-                    continued = play_random_track(&player, &playlist, file_name,
-                                                  sizeof(file_name));
+                    continued =
+                        play_random_track(&player, &playlist, &metadata);
                 } else {
-                    continued = play_next_track(&player, &playlist, file_name,
-                                                sizeof(file_name));
+                    continued = play_next_track(&player, &playlist, &metadata);
                 }
 
                 if (!continued && repeat_mode == REPEAT_ALL &&
                     playlist_get_count(&playlist) > 0) {
-                    continued = play_track(&player, &playlist, 0, file_name,
-                                           sizeof(file_name));
+                    continued = play_track(&player, &playlist, 0, &metadata);
                 }
 
                 if (continued) {
@@ -621,8 +613,7 @@ int main(int argc, char **argv)
                 Rectangle item = playlist_item_bounds(&layout, visible_index);
 
                 if (button_pressed(item, mouse, true)) {
-                    if (play_track(&player, &playlist, index, file_name,
-                                   sizeof(file_name))) {
+                    if (play_track(&player, &playlist, index, &metadata)) {
                         finished_handled = false;
                     }
 
@@ -631,8 +622,8 @@ int main(int argc, char **argv)
             }
         }
 
-        bool control_down = IsKeyDown(KEY_LEFT_CONTROL) ||
-                            IsKeyDown(KEY_RIGHT_CONTROL);
+        bool control_down =
+            IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
 
         if (control_down && IsKeyPressed(KEY_DELETE)) {
             player_clear(&player);
@@ -640,7 +631,7 @@ int main(int argc, char **argv)
             playlist_scroll = 0;
             finished_handled = false;
             seek_dragging = false;
-            snprintf(file_name, sizeof(file_name), "Drop an audio file");
+            metadata = (Track_Metadata){0};
             mp_log(INFO, "Playlist cleared");
         } else if (IsKeyPressed(KEY_DELETE) &&
                    playlist_get_count(&playlist) > 0) {
@@ -656,15 +647,14 @@ int main(int argc, char **argv)
             for (size_t i = 0; i < remaining; ++i) {
                 size_t index = (removed_index + i) % remaining;
 
-                if (play_track(&player, &playlist, index, file_name,
-                               sizeof(file_name))) {
+                if (play_track(&player, &playlist, index, &metadata)) {
                     loaded = true;
                     break;
                 }
             }
 
             if (!loaded) {
-                snprintf(file_name, sizeof(file_name), "Drop an audio file");
+                metadata = (Track_Metadata){0};
             }
 
             mp_log(INFO, "Removed track from playlist");
@@ -714,25 +704,21 @@ int main(int argc, char **argv)
             button_pressed(layout.next_button, mouse,
                            can_next && !sidebar_blocks_mouse)) {
             bool moved = shuffle_enabled
-                             ? play_random_track(&player, &playlist, file_name,
-                                                 sizeof(file_name))
-                             : play_next_track(&player, &playlist, file_name,
-                                               sizeof(file_name));
+                             ? play_random_track(&player, &playlist, &metadata)
+                             : play_next_track(&player, &playlist, &metadata);
 
             if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
-                play_track(&player, &playlist, 0, file_name, sizeof(file_name));
+                play_track(&player, &playlist, 0, &metadata);
             }
         }
 
         if ((IsKeyPressed(KEY_LEFT) && can_previous) ||
             button_pressed(layout.previous_button, mouse,
                            can_previous && !sidebar_blocks_mouse)) {
-            bool moved = play_previous_track(&player, &playlist, file_name,
-                                             sizeof(file_name));
+            bool moved = play_previous_track(&player, &playlist, &metadata);
 
             if (!moved && repeat_mode == REPEAT_ALL && track_count > 0) {
-                play_track(&player, &playlist, track_count - 1, file_name,
-                           sizeof(file_name));
+                play_track(&player, &playlist, track_count - 1, &metadata);
             }
         }
 
@@ -854,6 +840,17 @@ int main(int argc, char **argv)
         int playlist_x = status_x + MeasureText(status, layout.status_size) +
                          (int)(18.0f * layout.scale);
 
+        char details_text[METADATA_TEXT_SIZE * 2 + 8];
+
+        if (metadata.artist[0] != '\0' && metadata.album[0] != '\0') {
+            snprintf(details_text, sizeof(details_text), "%s  /  %s",
+                     metadata.artist, metadata.album);
+        } else if (metadata.artist[0] != '\0') {
+            snprintf(details_text, sizeof(details_text), "%s", metadata.artist);
+        } else {
+            snprintf(details_text, sizeof(details_text), "%s", metadata.album);
+        }
+
         float progress = length > 0.0f ? cursor / length : 0.0f;
 
         if (progress < 0.0f) progress = 0.0f;
@@ -872,7 +869,7 @@ int main(int argc, char **argv)
         };
 
         int title_size = layout.title_size;
-        int title_width = MeasureText(file_name, title_size);
+        int title_width = MeasureText(metadata.title, title_size);
         int title_max_width = layout.width - (int)(layout.title_x * 2.0f);
 
         if (title_width > title_max_width) {
@@ -895,8 +892,10 @@ int main(int argc, char **argv)
             DrawText(drop_text, drop_text_x, drop_text_y, drop_text_size,
                      RAYWHITE);
         } else {
-            DrawText(file_name, (int)layout.title_x, (int)layout.title_y,
+            DrawText(metadata.title, (int)layout.title_x, (int)layout.title_y,
                      title_size, RAYWHITE);
+            DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
+                     layout.status_size, GRAY);
             DrawText(status, status_x, (int)layout.metadata_y,
                      layout.status_size, LIGHTGRAY);
             DrawText(playlist_text, playlist_x, (int)layout.metadata_y,
