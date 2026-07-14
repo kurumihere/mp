@@ -197,11 +197,6 @@ typedef struct {
 } Album_Art;
 
 typedef struct {
-    char title[METADATA_TEXT_SIZE];
-    double started_at;
-} Title_Scroll;
-
-typedef struct {
     float scale;
     int width;
     int height;
@@ -475,18 +470,14 @@ static void draw_album_art(const Album_Art *album_art, Rectangle bounds)
                    WHITE);
 }
 
-static void draw_scrolling_title(Title_Scroll *scroll, const char *title,
-                                 Rectangle bounds, int font_size, float scale)
+static void draw_scrolling_text(const char *text, Rectangle bounds,
+                                int font_size, float scale, Color color,
+                                double started_at)
 {
-    if (strcmp(scroll->title, title) != 0) {
-        snprintf(scroll->title, sizeof(scroll->title), "%s", title);
-        scroll->started_at = GetTime();
-    }
-
-    int text_width = MeasureText(title, font_size);
+    int text_width = MeasureText(text, font_size);
 
     if ((float)text_width <= bounds.width) {
-        DrawText(title, (int)bounds.x, (int)bounds.y, font_size, RAYWHITE);
+        DrawText(text, (int)bounds.x, (int)bounds.y, font_size, color);
         return;
     }
 
@@ -495,7 +486,7 @@ static void draw_scrolling_title(Title_Scroll *scroll, const char *title,
     double pause = 1.25;
     double travel_time = distance / speed;
     double cycle_time = pause * 2.0 + travel_time * 2.0;
-    double elapsed = GetTime() - scroll->started_at;
+    double elapsed = GetTime() - started_at;
     double phase = fmod(elapsed < 0.0 ? 0.0 : elapsed, cycle_time);
     float offset;
 
@@ -512,8 +503,8 @@ static void draw_scrolling_title(Title_Scroll *scroll, const char *title,
 
     BeginScissorMode((int)bounds.x, (int)bounds.y, (int)bounds.width,
                      (int)bounds.height);
-    DrawText(title, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
-             font_size, RAYWHITE);
+    DrawText(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
+             font_size, color);
     EndScissorMode();
 }
 
@@ -745,7 +736,7 @@ static void draw_button(Rectangle bounds, Button_Icon icon,
 
 static void draw_playlist_panel(const Playlist *playlist,
                                 const Ui_Layout *layout, Vector2 mouse,
-                                int scroll)
+                                int scroll, double text_started_at)
 {
     Rectangle panel = layout->playlist_panel;
     int title_size = crisp_font_size(25.0f * layout->scale, 20, 40);
@@ -790,45 +781,53 @@ static void draw_playlist_panel(const Playlist *playlist,
         char title[METADATA_TEXT_SIZE + 32];
         snprintf(title, sizeof(title), "%zu. %s", index + 1, metadata->title);
 
-        BeginScissorMode((int)item.x + 10, (int)item.y, (int)item.width - 20,
-                         (int)item.height);
-        int text_x = (int)item.x + 10;
-
         bool has_artist = metadata->artist[0] != '\0';
         bool has_album = metadata->album[0] != '\0';
+        float text_x = snap_pixel(item.x + 10.0f);
+        float text_width = item.width - 20.0f;
+        Color title_color = index == current ? RAYWHITE : LIGHTGRAY;
 
         if (!has_artist && !has_album) {
-            DrawText(title, text_x,
-                     (int)(item.y + (item.height - title_size) / 2.0f),
-                     title_size, index == current ? RAYWHITE : LIGHTGRAY);
+            Rectangle title_bounds = {
+                text_x,
+                snap_pixel(item.y + (item.height - title_size) / 2.0f),
+                text_width,
+                (float)title_size,
+            };
+
+            draw_scrolling_text(title, title_bounds, title_size, layout->scale,
+                                title_color, text_started_at);
         } else {
-            DrawText(title, text_x,
-                     (int)snap_pixel(item.y + 5.0f * layout->scale), title_size,
-                     index == current ? RAYWHITE : LIGHTGRAY);
-
-            int details_y = (int)snap_pixel(item.y + 39.0f * layout->scale);
+            Rectangle title_bounds = {
+                text_x,
+                snap_pixel(item.y + 5.0f * layout->scale),
+                text_width,
+                (float)title_size,
+            };
             Color details_color = index == current ? LIGHTGRAY : GRAY;
-
-            if (has_artist) {
-                DrawText(metadata->artist, text_x, details_y, details_size,
-                         details_color);
-                text_x += MeasureText(metadata->artist, details_size);
-            }
+            char details[METADATA_TEXT_SIZE * 2 + 4];
 
             if (has_artist && has_album) {
-                int separator_gap = (int)snap_pixel(5.0f * layout->scale);
-                text_x += separator_gap;
-                DrawText("|", text_x, details_y, details_size, DARKGRAY);
-                text_x += MeasureText("|", details_size) + separator_gap;
+                snprintf(details, sizeof(details), "%s | %s", metadata->artist,
+                         metadata->album);
+            } else if (has_artist) {
+                snprintf(details, sizeof(details), "%s", metadata->artist);
+            } else {
+                snprintf(details, sizeof(details), "%s", metadata->album);
             }
 
-            if (has_album) {
-                DrawText(metadata->album, text_x, details_y, details_size,
-                         details_color);
-            }
+            Rectangle details_bounds = {
+                text_x,
+                snap_pixel(item.y + 39.0f * layout->scale),
+                text_width,
+                (float)details_size,
+            };
+
+            draw_scrolling_text(title, title_bounds, title_size, layout->scale,
+                                title_color, text_started_at);
+            draw_scrolling_text(details, details_bounds, details_size,
+                                layout->scale, details_color, text_started_at);
         }
-
-        EndScissorMode();
     }
 }
 
@@ -964,10 +963,10 @@ int main(int argc, char **argv)
     SetTargetFPS(60);
 
     Album_Art album_art = {0};
-    Title_Scroll title_scroll = {0};
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
+    double playlist_text_started_at = GetTime();
     bool finished_handled = false;
     bool seek_dragging = false;
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
@@ -1052,6 +1051,9 @@ int main(int argc, char **argv)
 
         if (playlist_toggled) {
             playlist_open = !playlist_open;
+
+            if (playlist_open) playlist_text_started_at = GetTime();
+
             layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
                                     playlist_open);
             playlist_toggle_visible =
@@ -1083,12 +1085,18 @@ int main(int argc, char **argv)
             CheckCollisionPointRec(mouse, layout.playlist_panel);
 
         if (mouse_over_playlist) {
+            int previous_scroll = playlist_scroll;
+
             if (mouse_wheel > 0.0f) --playlist_scroll;
             if (mouse_wheel < 0.0f) ++playlist_scroll;
 
             if (playlist_scroll < 0) playlist_scroll = 0;
             if (playlist_scroll > max_playlist_scroll) {
                 playlist_scroll = max_playlist_scroll;
+            }
+
+            if (playlist_scroll != previous_scroll) {
+                playlist_text_started_at = GetTime();
             }
         }
 
@@ -1390,14 +1398,16 @@ int main(int argc, char **argv)
                        layout.progress_bar.height / 2.0f),
         };
 
-        Rectangle title_bounds = snap_rectangle((Rectangle){
-            layout.title_x,
-            layout.title_y,
-            (float)layout.width - layout.title_x * 2.0f,
-            (float)layout.title_size,
-        });
+        int title_size = layout.title_size;
+        int title_width = MeasureText(metadata.title, title_size);
+        int title_max_width = layout.width - (int)(layout.title_x * 2.0f);
 
-        if (!has_track) title_scroll = (Title_Scroll){0};
+        if (title_width > title_max_width) {
+            title_size = title_size * title_max_width / title_width;
+            title_size = title_size / 10 * 10;
+
+            if (title_size < 10) title_size = 10;
+        }
 
         BeginDrawing();
         ClearBackground(background);
@@ -1413,8 +1423,8 @@ int main(int argc, char **argv)
                      RAYWHITE);
         } else {
             draw_album_art(&album_art, layout.album_art);
-            draw_scrolling_title(&title_scroll, metadata.title, title_bounds,
-                                 layout.title_size, layout.scale);
+            DrawText(metadata.title, (int)layout.title_x, (int)layout.title_y,
+                     title_size, RAYWHITE);
             DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
                      layout.status_size, GRAY);
             DrawText(status, status_x, (int)layout.metadata_y,
@@ -1452,7 +1462,8 @@ int main(int argc, char **argv)
         }
 
         if (has_track && playlist_open) {
-            draw_playlist_panel(&playlist, &layout, mouse, playlist_scroll);
+            draw_playlist_panel(&playlist, &layout, mouse, playlist_scroll,
+                                playlist_text_started_at);
         }
 
         if (playlist_toggle_visible) {
