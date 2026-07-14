@@ -16,6 +16,7 @@
 #include "svg.h"
 
 #define ASSET_PATH_SIZE 4096
+#define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 32
 
@@ -535,7 +536,7 @@ static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
 
 static void draw_scrolling_text(const char *text, Rectangle bounds,
                                 int font_size, float scale, Color color,
-                                double started_at)
+                                bool scrolling, double started_at)
 {
     int text_width = MeasureText(text, font_size);
 
@@ -544,24 +545,27 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
         return;
     }
 
-    float distance = (float)text_width - bounds.width;
-    float speed = clamp_float(48.0f * scale, 36.0f, 80.0f);
-    double pause = 1.25;
-    double travel_time = distance / speed;
-    double cycle_time = pause * 2.0 + travel_time * 2.0;
-    double elapsed = GetTime() - started_at;
-    double phase = fmod(elapsed < 0.0 ? 0.0 : elapsed, cycle_time);
-    float offset;
+    float offset = 0.0f;
 
-    if (phase < pause) {
-        offset = 0.0f;
-    } else if (phase < pause + travel_time) {
-        offset = (float)((phase - pause) * speed);
-    } else if (phase < pause * 2.0 + travel_time) {
-        offset = distance;
-    } else {
-        offset =
-            distance - (float)((phase - pause * 2.0 - travel_time) * speed);
+    if (scrolling) {
+        float distance = (float)text_width - bounds.width;
+        float speed = clamp_float(48.0f * scale, 36.0f, 80.0f);
+        double pause = 1.25;
+        double travel_time = distance / speed;
+        double cycle_time = pause * 2.0 + travel_time * 2.0;
+        double elapsed = GetTime() - started_at;
+        double phase = fmod(elapsed < 0.0 ? 0.0 : elapsed, cycle_time);
+
+        if (phase < pause) {
+            offset = 0.0f;
+        } else if (phase < pause + travel_time) {
+            offset = (float)((phase - pause) * speed);
+        } else if (phase < pause * 2.0 + travel_time) {
+            offset = distance;
+        } else {
+            offset =
+                distance - (float)((phase - pause * 2.0 - travel_time) * speed);
+        }
     }
 
     BeginScissorMode((int)bounds.x, (int)bounds.y, (int)bounds.width,
@@ -809,8 +813,8 @@ static void draw_button(Rectangle bounds, Button_Icon icon,
 }
 
 static void draw_playlist_panel(const Playlist *playlist,
-                                const Ui_Layout *layout, Vector2 mouse,
-                                int scroll, double text_started_at)
+                                const Ui_Layout *layout, int scroll,
+                                size_t hovered_track, double text_started_at)
 {
     Rectangle panel = layout->playlist_panel;
     int title_size = crisp_font_size(25.0f * layout->scale, 20, 40);
@@ -840,7 +844,7 @@ static void draw_playlist_panel(const Playlist *playlist,
 
         Rectangle item = playlist_item_bounds(layout, visible_index);
 
-        bool hovered = CheckCollisionPointRec(mouse, item);
+        bool hovered = index == hovered_track;
         Color fill = index == current ? (Color){58, 58, 58, 255}
                                       : (Color){31, 31, 31, 255};
 
@@ -870,7 +874,7 @@ static void draw_playlist_panel(const Playlist *playlist,
             };
 
             draw_scrolling_text(title, title_bounds, title_size, layout->scale,
-                                title_color, text_started_at);
+                                title_color, hovered, text_started_at);
         } else {
             Rectangle title_bounds = {
                 text_x,
@@ -898,9 +902,10 @@ static void draw_playlist_panel(const Playlist *playlist,
             };
 
             draw_scrolling_text(title, title_bounds, title_size, layout->scale,
-                                title_color, text_started_at);
+                                title_color, hovered, text_started_at);
             draw_scrolling_text(details, details_bounds, details_size,
-                                layout->scale, details_color, text_started_at);
+                                layout->scale, details_color, hovered,
+                                text_started_at);
         }
     }
 }
@@ -1042,7 +1047,10 @@ int main(int argc, char **argv)
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
+    size_t playlist_text_track = PLAYLIST_TRACK_NONE;
     double playlist_text_started_at = GetTime();
+    size_t current_title_text_track = PLAYLIST_TRACK_NONE;
+    double current_title_text_started_at = GetTime();
     bool finished_handled = false;
     bool seek_dragging = false;
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
@@ -1159,6 +1167,7 @@ int main(int argc, char **argv)
         bool mouse_over_playlist =
             has_track && playlist_open &&
             CheckCollisionPointRec(mouse, layout.playlist_panel);
+        size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
 
         if (mouse_over_playlist) {
             int previous_scroll = playlist_scroll;
@@ -1186,6 +1195,10 @@ int main(int argc, char **argv)
 
                 Rectangle item = playlist_item_bounds(&layout, visible_index);
 
+                if (!CheckCollisionPointRec(mouse, item)) continue;
+
+                hovered_playlist_track = index;
+
                 if (button_pressed(item, mouse, true)) {
                     if (select_track(&player, &playlist, &playback_order, index,
                                      &metadata)) {
@@ -1194,7 +1207,14 @@ int main(int argc, char **argv)
 
                     break;
                 }
+
+                break;
             }
+        }
+
+        if (hovered_playlist_track != playlist_text_track) {
+            playlist_text_track = hovered_playlist_track;
+            playlist_text_started_at = GetTime();
         }
 
         bool control_down =
@@ -1474,15 +1494,33 @@ int main(int argc, char **argv)
                        layout.progress_bar.height / 2.0f),
         };
 
-        int title_size = layout.title_size;
-        int title_width = MeasureText(metadata.title, title_size);
-        int title_max_width = layout.width - (int)(layout.title_x * 2.0f);
+        float current_title_right = (float)layout.width - layout.title_x;
 
-        if (title_width > title_max_width) {
-            title_size = title_size * title_max_width / title_width;
-            title_size = title_size / 10 * 10;
+        if (playlist_open) {
+            current_title_right = layout.playlist_panel.x - layout.title_x;
+        }
 
-            if (title_size < 10) title_size = 10;
+        Rectangle current_title_bounds = snap_rectangle((Rectangle){
+            layout.title_x,
+            layout.title_y,
+            current_title_right - layout.title_x,
+            (float)layout.title_size,
+        });
+
+        if (current_title_bounds.width < 0.0f) {
+            current_title_bounds.width = 0.0f;
+        }
+
+        bool current_title_hovered =
+            has_track && !sidebar_blocks_mouse &&
+            CheckCollisionPointRec(mouse, current_title_bounds);
+        size_t hovered_current_title = current_title_hovered
+                                           ? playlist_get_current(&playlist)
+                                           : PLAYLIST_TRACK_NONE;
+
+        if (hovered_current_title != current_title_text_track) {
+            current_title_text_track = hovered_current_title;
+            current_title_text_started_at = GetTime();
         }
 
         size_t bar_count = spectrum_bar_count(layout.spectrum, layout.scale);
@@ -1516,8 +1554,10 @@ int main(int argc, char **argv)
         } else {
             draw_album_art(&album_art, layout.album_art);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale);
-            DrawText(metadata.title, (int)layout.title_x, (int)layout.title_y,
-                     title_size, RAYWHITE);
+            draw_scrolling_text(metadata.title, current_title_bounds,
+                                layout.title_size, layout.scale, RAYWHITE,
+                                current_title_hovered,
+                                current_title_text_started_at);
             DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
                      layout.status_size, GRAY);
             DrawText(status, status_x, (int)layout.metadata_y,
@@ -1555,7 +1595,8 @@ int main(int argc, char **argv)
         }
 
         if (has_track && playlist_open) {
-            draw_playlist_panel(&playlist, &layout, mouse, playlist_scroll,
+            draw_playlist_panel(&playlist, &layout, playlist_scroll,
+                                hovered_playlist_track,
                                 playlist_text_started_at);
         }
 
