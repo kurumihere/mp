@@ -118,16 +118,19 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
     float padding = clamp_float(12.0f * scale, 8.0f, 24.0f);
     float gap = clamp_float(8.0f * scale, 6.0f, 16.0f);
     float controls_y = (float)height - padding - button_size;
-    float panel_width = clamp_float(340.0f * scale, 220.0f, 500.0f);
+    float panel_width = clamp_float(320.0f * scale, 220.0f, 460.0f);
+    float panel_height =
+        clamp_float(420.0f * scale, 240.0f, (float)height - padding * 2.0f);
     float toggle_width = clamp_float(32.0f * scale, 24.0f, 48.0f);
     float toggle_height = clamp_float(72.0f * scale, 52.0f, 108.0f);
     float next_x = (float)width - padding - button_size;
     float play_x = next_x - gap - button_size;
     float previous_x = play_x - gap - button_size;
     float panel_x = (float)width - panel_width;
+    float panel_y = ((float)height - panel_height) / 2.0f;
 
-    if (panel_width + toggle_width > (float)width) {
-        panel_width = (float)width - toggle_width;
+    if (panel_width + toggle_width + gap + padding > (float)width) {
+        panel_width = (float)width - toggle_width - gap - padding;
         panel_x = (float)width - panel_width;
     }
 
@@ -140,7 +143,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .title_x = padding,
         .title_y = controls_y - 100.0f * scale,
         .metadata_y = controls_y - 37.0f * scale,
-        .playlist_top = 70.0f * scale,
+        .playlist_top = panel_y + 64.0f * scale,
         .playlist_item_height = 42.0f * scale,
         .playlist_item_gap = 4.0f * scale,
         .previous_button = {previous_x, controls_y, button_size, button_size},
@@ -153,10 +156,10 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
                 previous_x - gap - padding,
                 progress_height,
             },
-        .playlist_panel = {panel_x, 0.0f, panel_width, (float)height},
+        .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
         .playlist_toggle =
             {
-                playlist_open ? panel_x - toggle_width
+                playlist_open ? panel_x - gap - toggle_width
                               : (float)width - toggle_width,
                 ((float)height - toggle_height) / 2.0f,
                 toggle_width,
@@ -171,7 +174,9 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         24.0f * scale,
     };
 
-    float playlist_space = (float)height - layout.playlist_top - 16.0f * scale;
+    float playlist_space = layout.playlist_panel.y +
+                           layout.playlist_panel.height - layout.playlist_top -
+                           12.0f * scale;
     float playlist_step =
         layout.playlist_item_height + layout.playlist_item_gap;
     layout.visible_playlist_items = (int)(playlist_space / playlist_step);
@@ -265,15 +270,15 @@ static void draw_playlist_panel(const Playlist *playlist,
     size_t current = playlist_get_current(playlist);
 
     DrawRectangleRec(panel, (Color){24, 24, 24, 255});
-    DrawLine((int)panel.x, 0, (int)panel.x, (int)panel.height,
-             (Color){55, 55, 55, 255});
+    DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
+             (int)(panel.y + panel.height), (Color){55, 55, 55, 255});
     DrawText("Playlist", (int)(panel.x + 20.0f * layout->scale),
-             (int)(24.0f * layout->scale),
+             (int)(panel.y + 20.0f * layout->scale),
              crisp_font_size(26.0f * layout->scale, 20, 40), RAYWHITE);
 
     if (count == 0) {
         DrawText("No tracks", (int)(panel.x + 20.0f * layout->scale),
-                 (int)(76.0f * layout->scale),
+                 (int)(panel.y + 70.0f * layout->scale),
                  crisp_font_size(20.0f * layout->scale, 10, 30), GRAY);
         return;
     }
