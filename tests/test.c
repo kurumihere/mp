@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "m3u.h"
 #include "metadata.h"
 #include "playback_order.h"
 #include "playlist.h"
@@ -118,6 +119,73 @@ static void test_playlist(void)
     playlist_clear(&playlist);
     CHECK(playlist_get_count(&playlist) == 0);
     playlist_uninit(&playlist);
+}
+
+static void test_m3u(void)
+{
+    const char *input_path = "build/cache/test-input.m3u";
+    const char *output_path = "build/cache/test-output.m3u8";
+    FILE *file = fopen(input_path, "wb");
+
+    CHECK(file != NULL);
+
+    if (file != NULL) {
+        fputs("\xef\xbb\xbf#EXTM3U\r\n", file);
+        fputs("#EXTINF:1,Relative\n", file);
+        fputs("relative.mp3\r\n", file);
+        fputs("/absolute/track.flac\n", file);
+        CHECK(fclose(file) == 0);
+    }
+
+    CHECK(m3u_is_path("playlist.M3U"));
+    CHECK(m3u_is_path("playlist.m3u8"));
+    CHECK(!m3u_is_path("playlist.txt"));
+
+    Playlist playlist;
+    playlist_init(&playlist);
+    CHECK(m3u_replace(&playlist, input_path));
+    CHECK(playlist_get_count(&playlist) == 2);
+
+    const char *relative = playlist_get(&playlist, 0);
+    const char *suffix = "/build/cache/relative.mp3";
+    size_t suffix_length = strlen(suffix);
+    CHECK(relative != NULL);
+
+    if (relative != NULL) {
+        size_t relative_length = strlen(relative);
+        CHECK(relative_length >= suffix_length);
+
+        if (relative_length >= suffix_length) {
+            CHECK(strcmp(relative + relative_length - suffix_length, suffix) ==
+                  0);
+        }
+    }
+
+    CHECK(strcmp(playlist_get(&playlist, 1), "/absolute/track.flac") == 0);
+
+    const char *saved_paths[] = {
+        "/music/first.mp3",
+        "/music/second.flac",
+    };
+    CHECK(playlist_replace(&playlist, saved_paths, 2));
+    CHECK(m3u_save(&playlist, output_path));
+
+    Playlist restored;
+    playlist_init(&restored);
+    CHECK(m3u_replace(&restored, output_path));
+    CHECK(playlist_get_count(&restored) == 2);
+    CHECK(strcmp(playlist_get(&restored, 0), saved_paths[0]) == 0);
+    CHECK(strcmp(playlist_get(&restored, 1), saved_paths[1]) == 0);
+
+    size_t added = 0;
+    CHECK(m3u_append(&restored, output_path, &added));
+    CHECK(added == 2);
+    CHECK(playlist_get_count(&restored) == 4);
+
+    playlist_uninit(&restored);
+    playlist_uninit(&playlist);
+    remove(input_path);
+    remove(output_path);
 }
 
 static void write_u24_be(FILE *file, uint32_t value)
@@ -307,6 +375,7 @@ int main(void)
 {
     test_playback_order();
     test_playlist();
+    test_m3u();
     test_metadata();
 
     if (failures != 0) {

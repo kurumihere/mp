@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "log.h"
+#include "m3u.h"
 #include "metadata.h"
 #include "playback_order.h"
 #include "player.h"
@@ -26,6 +27,47 @@ static bool play_track(Player *player, Playlist *playlist, size_t index,
         metadata_load(path, metadata);
     }
 
+    return true;
+}
+
+static bool append_inputs_in_place(Playlist *playlist, const char *const *paths,
+                                   size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        bool success;
+
+        if (m3u_is_path(paths[i])) {
+            success = m3u_append(playlist, paths[i], NULL);
+        } else {
+            success = playlist_append(playlist, &paths[i], 1);
+        }
+
+        if (!success) return false;
+    }
+
+    return true;
+}
+
+static bool update_input_paths(Playlist *playlist, const char *const *paths,
+                               size_t count, bool replace, size_t *added)
+{
+    Playlist replacement;
+    playlist_init(&replacement);
+
+    if ((!replace &&
+         !playlist_append(&replacement, (const char *const *)playlist->paths,
+                          playlist->count)) ||
+        !append_inputs_in_place(&replacement, paths, count)) {
+        playlist_uninit(&replacement);
+        return false;
+    }
+
+    if (added != NULL) {
+        *added = replacement.count - (replace ? 0 : playlist->count);
+    }
+
+    playlist_uninit(playlist);
+    *playlist = replacement;
     return true;
 }
 
@@ -547,13 +589,15 @@ int main(int argc, char **argv)
     const int w_height = 700;
 
     const char *window_title = "Music Player";
+    const char *playlist_file_path =
+        argc == 2 && m3u_is_path(argv[1]) ? argv[1] : "playlist.m3u";
     Track_Metadata metadata = {0};
 
     if (argc > 1) {
         bool loaded = false;
 
-        if (playlist_replace(&playlist, (const char *const *)&argv[1],
-                             (size_t)(argc - 1))) {
+        if (update_input_paths(&playlist, (const char *const *)&argv[1],
+                               (size_t)(argc - 1), true, NULL)) {
             for (size_t i = 0; i < playlist_get_count(&playlist); ++i) {
                 if (play_track(&player, &playlist, i, &metadata)) {
                     loaded = true;
@@ -601,10 +645,11 @@ int main(int argc, char **argv)
 
             if (dropped_files.count > 0) {
                 size_t first_new_track = playlist_get_count(&playlist);
+                size_t added = 0;
 
-                if (playlist_append(&playlist,
-                                    (const char *const *)dropped_files.paths,
-                                    dropped_files.count)) {
+                if (update_input_paths(&playlist,
+                                       (const char *const *)dropped_files.paths,
+                                       dropped_files.count, false, &added)) {
                     if (player_get_state(&player) == PLAYER_STOPPED) {
                         for (size_t i = first_new_track;
                              i < playlist_get_count(&playlist); ++i) {
@@ -620,8 +665,7 @@ int main(int argc, char **argv)
                         exit_code = 1;
                     }
 
-                    mp_log(INFO, "Added %u tracks to playlist",
-                           dropped_files.count);
+                    mp_log(INFO, "Added %zu tracks to playlist", added);
                 }
             }
 
@@ -724,6 +768,11 @@ int main(int argc, char **argv)
 
         bool control_down =
             IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+
+        if (control_down && IsKeyPressed(KEY_S) &&
+            m3u_save(&playlist, playlist_file_path)) {
+            mp_log(INFO, "Saved playlist to \"%s\"", playlist_file_path);
+        }
 
         if (control_down && IsKeyPressed(KEY_DELETE)) {
             player_clear(&player);

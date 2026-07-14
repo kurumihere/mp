@@ -297,6 +297,28 @@ static bool build_playlist(void)
     return result;
 }
 
+static bool build_m3u(void)
+{
+    const char *inputs[] = {
+        "src/m3u.c", "src/m3u.h", "src/log.h", "src/playlist.h", "nob.c",
+    };
+
+    int rebuild = needs_rebuild("build/cache/m3u.o", inputs, ARRAY_LEN(inputs));
+
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return true;
+
+    Cmd cmd = {0};
+
+    cmd_append(&cmd, "cc", "-c", "src/m3u.c", "-o", "build/cache/m3u.o",
+               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror");
+
+    bool result = cmd_run(&cmd);
+    cmd_free(cmd);
+
+    return result;
+}
+
 static bool build_metadata(void)
 {
     const char *inputs[] = {
@@ -346,6 +368,7 @@ static bool build_app(Link_Mode mode)
         "thirdparty/raylib/src/raylib.h",
         "thirdparty/miniaudio/miniaudio.h",
         "src/log.h",
+        "src/m3u.h",
         "src/metadata.h",
         "src/playback_order.h",
         "src/player.h",
@@ -388,6 +411,7 @@ static bool build_app(Link_Mode mode)
         "build/cache/miniaudio.o",
         "build/cache/nanosvg.o",
         "build/cache/log.o",
+        "build/cache/m3u.o",
         "build/cache/metadata.o",
         "build/cache/player.o",
         "build/cache/playback_order.o",
@@ -407,9 +431,10 @@ static bool build_app(Link_Mode mode)
     if (rebuild > 0) {
         cmd_append(&cmd, "cc", "-o", output, "build/cache/mp.o",
                    "build/cache/miniaudio.o", "build/cache/nanosvg.o",
-                   "build/cache/log.o", "build/cache/player.o",
-                   "build/cache/playback_order.o", "build/cache/playlist.o",
-                   "build/cache/svg.o", "build/cache/metadata.o");
+                   "build/cache/log.o", "build/cache/m3u.o",
+                   "build/cache/player.o", "build/cache/playback_order.o",
+                   "build/cache/playlist.o", "build/cache/svg.o",
+                   "build/cache/metadata.o");
 
         if (mode == LINK_STATIC) {
             cmd_append(&cmd, "build/cache/libraylib.a");
@@ -435,8 +460,8 @@ static bool build_app(Link_Mode mode)
 static bool run_tests(void)
 {
     const char *test_inputs[] = {
-        "tests/test.c",   "src/metadata.h", "src/playback_order.h",
-        "src/playlist.h", "nob.c",
+        "tests/test.c",         "src/m3u.h",      "src/metadata.h",
+        "src/playback_order.h", "src/playlist.h", "nob.c",
     };
 
     int rebuild = needs_rebuild("build/cache/test.o", test_inputs,
@@ -458,9 +483,13 @@ static bool run_tests(void)
     }
 
     const char *link_inputs[] = {
-        "build/cache/test.o",     "build/cache/log.o",
-        "build/cache/metadata.o", "build/cache/playback_order.o",
-        "build/cache/playlist.o", "nob.c",
+        "build/cache/test.o",
+        "build/cache/log.o",
+        "build/cache/m3u.o",
+        "build/cache/metadata.o",
+        "build/cache/playback_order.o",
+        "build/cache/playlist.o",
+        "nob.c",
     };
 
     rebuild = needs_rebuild("build/cache/mp-tests", link_inputs,
@@ -474,8 +503,8 @@ static bool run_tests(void)
     if (rebuild > 0) {
         cmd_append(&cmd, "cc", "-o", "build/cache/mp-tests",
                    "build/cache/test.o", "build/cache/log.o",
-                   "build/cache/metadata.o", "build/cache/playback_order.o",
-                   "build/cache/playlist.o");
+                   "build/cache/m3u.o", "build/cache/metadata.o",
+                   "build/cache/playback_order.o", "build/cache/playlist.o");
 
         if (!cmd_run(&cmd)) {
             cmd_free(cmd);
@@ -549,6 +578,7 @@ int main(int argc, char **argv)
         if (!build_metadata()) return 1;
         if (!build_playback_order()) return 1;
         if (!build_playlist()) return 1;
+        if (!build_m3u()) return 1;
         return run_tests() ? 0 : 1;
     }
 
@@ -560,6 +590,7 @@ int main(int argc, char **argv)
     if (!build_player()) return 1;
     if (!build_playback_order()) return 1;
     if (!build_playlist()) return 1;
+    if (!build_m3u()) return 1;
     if (!build_svg()) return 1;
     if (!build_app(mode)) return 1;
 
