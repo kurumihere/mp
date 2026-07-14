@@ -62,6 +62,12 @@ Use `./nob run static [files...]` to run the static raylib configuration.
 Audio files and M3U playlists can also be dropped onto the window. Relative
 entries in an M3U file are resolved from that playlist's directory.
 
+When started without files, the player restores the previous playlist, current
+track and position, volume and mute, and repeat and shuffle modes. The restored
+track opens paused. Explicitly provided files replace the saved playlist. The
+session is saved atomically in `$XDG_STATE_HOME/mp/state`, or in
+`~/.local/state/mp/state` when `XDG_STATE_HOME` is not set.
+
 `Ctrl+S` saves the current playlist. When the player was opened with one M3U
 file, that file is updated atomically. Otherwise the playlist is written to
 `playlist.m3u` in the current working directory.

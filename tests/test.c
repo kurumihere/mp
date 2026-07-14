@@ -2,11 +2,13 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "m3u.h"
 #include "metadata.h"
 #include "playback_order.h"
 #include "playlist.h"
+#include "session.h"
 
 static int failures;
 
@@ -186,6 +188,85 @@ static void test_m3u(void)
     playlist_uninit(&playlist);
     remove(input_path);
     remove(output_path);
+}
+
+static void test_session(void)
+{
+    const char *directory = "build/cache/test-session";
+    const char *path = "build/cache/test-session/state";
+    const char *tracks[] = {
+        "/music/session-first.mp3",
+        "session-second.flac",
+    };
+
+    remove(path);
+    rmdir(directory);
+
+    Playlist playlist;
+    playlist_init(&playlist);
+    CHECK(playlist_append(&playlist, tracks, 2));
+    CHECK(playlist_select(&playlist, 1));
+
+    Session_State state = {
+        .current = 1,
+        .cursor = 42.5f,
+        .volume = 0.75f,
+        .repeat_mode = 2,
+        .muted = true,
+        .shuffled = true,
+    };
+
+    CHECK(session_save(path, &playlist, &state));
+
+    Playlist restored;
+    playlist_init(&restored);
+    Session_State restored_state;
+    session_state_defaults(&restored_state);
+
+    CHECK(session_load(path, &restored, &restored_state) == SESSION_LOAD_OK);
+    CHECK(playlist_get_count(&restored) == 2);
+    CHECK(strcmp(playlist_get(&restored, 0), tracks[0]) == 0);
+
+    char working_directory[4096];
+    char absolute_track[4096];
+    bool have_working_directory =
+        getcwd(working_directory, sizeof(working_directory)) != NULL;
+    CHECK(have_working_directory);
+
+    if (have_working_directory) {
+        int written = snprintf(absolute_track, sizeof(absolute_track), "%s/%s",
+                               working_directory, tracks[1]);
+        CHECK(written >= 0 && (size_t)written < sizeof(absolute_track));
+
+        if (written >= 0 && (size_t)written < sizeof(absolute_track)) {
+            CHECK(strcmp(playlist_get(&restored, 1), absolute_track) == 0);
+        }
+    }
+    CHECK(restored_state.current == state.current);
+    CHECK(restored_state.cursor == state.cursor);
+    CHECK(restored_state.volume == state.volume);
+    CHECK(restored_state.repeat_mode == state.repeat_mode);
+    CHECK(restored_state.muted == state.muted);
+    CHECK(restored_state.shuffled == state.shuffled);
+
+    FILE *file = fopen(path, "wb");
+    CHECK(file != NULL);
+
+    if (file != NULL) {
+        fputs("invalid", file);
+        CHECK(fclose(file) == 0);
+    }
+
+    CHECK(session_load(path, &restored, &restored_state) == SESSION_LOAD_ERROR);
+    CHECK(playlist_get_count(&restored) == 2);
+    CHECK(restored_state.cursor == state.cursor);
+
+    remove(path);
+    CHECK(session_load(path, &restored, &restored_state) ==
+          SESSION_LOAD_NOT_FOUND);
+    rmdir(directory);
+    playlist_uninit(&restored);
+    playlist_uninit(&playlist);
 }
 
 static void write_u24_be(FILE *file, uint32_t value)
@@ -376,6 +457,7 @@ int main(void)
     test_playback_order();
     test_playlist();
     test_m3u();
+    test_session();
     test_metadata();
 
     if (failures != 0) {

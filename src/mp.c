@@ -8,9 +8,11 @@
 #include "player.h"
 #include "playlist.h"
 #include "raylib.h"
+#include "session.h"
 #include "svg.h"
 
 #define ASSET_PATH_SIZE 4096
+#define SESSION_PATH_SIZE 4096
 
 static bool play_track(Player *player, Playlist *playlist, size_t index,
                        Track_Metadata *metadata)
@@ -659,27 +661,79 @@ int main(int argc, char **argv)
     const char *playlist_file_path =
         argc == 2 && m3u_is_path(argv[1]) ? argv[1] : "playlist.m3u";
     Track_Metadata metadata = {0};
+    Session_State session_state;
+    session_state_defaults(&session_state);
+
+    char session_path[SESSION_PATH_SIZE];
+    bool session_path_available =
+        session_default_path(session_path, sizeof(session_path));
+    bool session_loaded = false;
+
+    if (session_path_available) {
+        session_loaded = session_load(session_path, &playlist,
+                                      &session_state) == SESSION_LOAD_OK;
+    }
+
+    bool restore_playback = session_loaded && argc == 1;
 
     if (argc > 1) {
-        bool loaded = false;
-
-        if (update_input_paths(&playlist, (const char *const *)&argv[1],
-                               (size_t)(argc - 1), true, NULL)) {
-            for (size_t i = 0; i < playlist_get_count(&playlist); ++i) {
-                if (play_track(&player, &playlist, i, &metadata)) {
-                    loaded = true;
-                    break;
-                }
-            }
+        if (!update_input_paths(&playlist, (const char *const *)&argv[1],
+                                (size_t)(argc - 1), true, NULL)) {
+            playlist_clear(&playlist);
         }
 
-        if (!loaded) {
-            playlist_uninit(&playlist);
+        session_state.current = 0;
+    }
+
+    player_set_volume(&player, session_state.volume);
+
+    if (session_state.muted) player_toggle_mute(&player);
+
+    bool loaded = false;
+    size_t loaded_index = 0;
+    size_t track_count = playlist_get_count(&playlist);
+    size_t first_index = restore_playback ? session_state.current : 0;
+
+    if (restore_playback && track_count > 0) {
+        playlist_select(&playlist, session_state.current);
+    }
+
+    for (size_t i = 0; i < track_count; ++i) {
+        size_t index = (first_index + i) % track_count;
+
+        if (play_track(&player, &playlist, index, &metadata)) {
+            loaded = true;
+            loaded_index = index;
+            break;
         }
     }
 
-    if (!reset_playback_order(&playback_order, &playlist, false)) {
+    if (!loaded && !restore_playback) playlist_clear(&playlist);
+
+    if (loaded && restore_playback) {
+        if (!player_toggle(&player)) {
+            playlist_uninit(&playlist);
+            playback_order_uninit(&playback_order);
+            player_uninit(&player);
+            return 1;
+        }
+
+        if (loaded_index == session_state.current &&
+            session_state.cursor > 0.0f) {
+            float length = player_get_length(&player);
+            float cursor = session_state.cursor;
+
+            if (length > 0.0f && cursor >= length) cursor = 0.0f;
+
+            player_seek(&player, cursor);
+        }
+    }
+
+    bool shuffle_enabled = session_state.shuffled;
+
+    if (!reset_playback_order(&playback_order, &playlist, shuffle_enabled)) {
         playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
         player_uninit(&player);
         return 1;
     }
@@ -713,8 +767,7 @@ int main(int argc, char **argv)
     bool playlist_open = false;
     bool finished_handled = false;
     bool seek_dragging = false;
-    Repeat_Mode repeat_mode = REPEAT_OFF;
-    bool shuffle_enabled = false;
+    Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
 
     while (!WindowShouldClose()) {
         if (IsFileDropped()) {
@@ -1175,6 +1228,21 @@ int main(int argc, char **argv)
                              mouse);
 
         EndDrawing();
+    }
+
+    if (session_path_available) {
+        size_t count = playlist_get_count(&playlist);
+
+        Session_State saved_state = {
+            .current = count == 0 ? 0 : playlist_get_current(&playlist),
+            .cursor = player_get_cursor(&player),
+            .volume = player_get_volume(&player),
+            .repeat_mode = repeat_mode,
+            .muted = player_is_muted(&player),
+            .shuffled = shuffle_enabled,
+        };
+
+        session_save(session_path, &playlist, &saved_state);
     }
 
     unload_ui_icons(&icons);
