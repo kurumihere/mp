@@ -2,15 +2,23 @@ name: build
 
 on:
   push:
+    branches: [master]
   pull_request:
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -18,18 +26,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ubuntu
-            os: ubuntu-latest
+          - name: linux
+            os: ubuntu-24.04
             shell: bash
           - name: windows
-            os: windows-latest
+            os: windows-2025
             shell: msys2 {0}
           - name: macos
-            os: macos-latest
+            os: macos-15
             shell: bash
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -48,12 +59,16 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          update: true
           install: mingw-w64-ucrt-x86_64-gcc
 
-      - name: Build and test
-        run: |
-          cc -std=c99 -o nob nob.c
-          ./nob
-          ./nob
-          ./nob test
+      - name: Bootstrap nob
+        run: cc -std=c99 -o nob nob.c
+
+      - name: Clean build
+        run: ./nob
+
+      - name: Incremental build
+        run: ./nob
+
+      - name: Run tests
+        run: ./nob test
