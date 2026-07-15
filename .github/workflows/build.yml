@@ -1,0 +1,51 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+          - name: windows
+            os: windows-latest
+          - name: macos
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up MSYS2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Build and test
+        if: runner.os != 'Windows'
+        run: |
+          cc -std=c99 -o nob nob.c
+          ./nob
+          ./nob
+          ./nob test
+
+      - name: Build and test
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cc -std=c99 -o nob nob.c
+          ./nob
+          ./nob
+          ./nob test

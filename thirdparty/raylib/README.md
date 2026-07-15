@@ -1,26 +1,29 @@
 # raylib 6.0
 
-This directory contains prebuilt raylib libraries for x86-64 Linux with X11
-and OpenGL 3.3:
+This directory contains the source code of the official raylib 6.0 release.
+`nob` builds a static library in `build/cache/` for the current operating
+system; generated raylib libraries are not committed.
 
-- `lib/libraylib.so` for the default dynamic build;
-- `lib/libraylib.a` for `./nob static`;
-- `include/raylib.h` for application compilation.
+The complete desktop backends are retained so the same source tree can be
+built natively on Linux, Windows, and macOS. Audio and 3D model modules are
+disabled because mp uses miniaudio and only the 2D raylib API.
 
-The retained `src/` tree is the minimal source set needed to rebuild those two
-libraries offline. It enables shapes, textures, text, JPEG images, and the GLFW
-X11 backend; the audio and 3D model modules are disabled. The project's
-Cyrillic default-font extension lives in `src/rtext_cyrillic.h` and is wired
-into `src/rtext.c`.
+`src/rtext_cyrillic.h` and its include in `src/rtext.c` are the only local
+source changes. They extend raylib's default font with Russian glyphs.
 
-After changing the built-in glyph data, including a future CJK table, rebuild
-and strip both libraries with:
+To update raylib:
 
-```sh
-./nob raylib
-```
+1. Download a tagged source release from <https://github.com/raysan5/raylib>.
+2. Replace this directory with that release while preserving
+   `src/rtext_cyrillic.h` and its include in `src/rtext.c`.
+3. Update the version in this file.
+4. Run `./nob raylib`, `./nob`, and a second `./nob`.
 
-Run `./nob` or `./nob static` afterward to relink the player.
+The raylib part of cross-platform builds is native: bootstrap and run `nob` on
+the target operating system. Linux requires OpenGL and X11 development files,
+Windows requires a MinGW-w64 environment, and macOS requires the Xcode
+command-line tools. Complete mp builds must still be verified on each target;
+platform-specific application code is outside this vendored dependency.
 
-raylib is distributed under the zlib/libpng license in `LICENSE`. The bundled
-GLFW source retains its license in `src/external/glfw/LICENSE.md`.
+raylib is distributed under the zlib/libpng license in `LICENSE`. Bundled GLFW
+retains its license in `src/external/glfw/LICENSE.md`.

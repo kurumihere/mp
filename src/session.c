@@ -9,6 +9,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
 #include "log.h"
 
 #define MAX_SESSION_PATH ((uint64_t)1024 * 1024)
@@ -126,7 +130,13 @@ static bool make_parent_directories(const char *path)
 
         *character = '\0';
 
-        if (mkdir(copy, 0700) != 0 && errno != EEXIST) {
+#ifdef _WIN32
+        int result = _mkdir(copy);
+#else
+        int result = mkdir(copy, 0700);
+#endif
+
+        if (result != 0 && errno != EEXIST) {
             free(copy);
             return false;
         }

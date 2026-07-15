@@ -4,11 +4,6 @@
 #include "thirdparty/nob.h"
 
 typedef enum {
-    LINK_STATIC,
-    LINK_DYNAMIC,
-} Link_Mode;
-
-typedef enum {
     COMMAND_BUILD,
     COMMAND_RUN,
     COMMAND_TEST,
@@ -17,33 +12,17 @@ typedef enum {
 
 static void append_system_libraries(Cmd *cmd)
 {
+#if defined(_WIN32)
+    cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32");
+#elif defined(__APPLE__)
+    cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa", "-framework",
+               "IOKit", "-framework", "CoreAudio", "-framework", "CoreVideo");
+#else
     cmd_append(cmd, "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11");
+#endif
 }
 
-static bool prepare_raylib(Link_Mode mode)
-{
-    const char *source = mode == LINK_STATIC
-                             ? "thirdparty/raylib/lib/libraylib.a"
-                             : "thirdparty/raylib/lib/libraylib.so";
-
-    if (!file_exists(source)) {
-        nob_log(ERROR, "Missing prebuilt raylib library: %s", source);
-        return false;
-    }
-
-    if (mode == LINK_STATIC) return true;
-
-    const char *inputs[] = {source, "nob.c"};
-    const char *destination = "build/cache/libraylib.so";
-    int rebuild = needs_rebuild(destination, inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    return copy_file(source, destination);
-}
-
-static bool rebuild_raylib(void)
+static bool build_raylib(bool force)
 {
     const char *sources[] = {
         "thirdparty/raylib/src/rcore.c",   "thirdparty/raylib/src/rglfw.c",
@@ -55,21 +34,47 @@ static bool rebuild_raylib(void)
         "build/cache/raylib-rshapes.o", "build/cache/raylib-rtextures.o",
         "build/cache/raylib-rtext.o",
     };
+    const char *common_inputs[] = {
+        "thirdparty/raylib/src/raylib.h",
+        "thirdparty/raylib/src/config.h",
+        "thirdparty/raylib/src/rlgl.h",
+        "thirdparty/raylib/src/rtext_cyrillic.h",
+        "nob.c",
+    };
     Cmd cmd = {0};
 
     for (size_t i = 0; i < ARRAY_LEN(sources); ++i) {
-        cmd_append(&cmd, "cc", "-c", sources[i], "-o", objects[i], "-std=c99",
-                   "-O2", "-fPIC", "-D_DEBUG", "-D_GNU_SOURCE",
+        const char *inputs[ARRAY_LEN(common_inputs) + 1];
+        inputs[0] = sources[i];
+        memcpy(inputs + 1, common_inputs, sizeof(common_inputs));
+
+        int rebuild =
+            force ? 1 : needs_rebuild(objects[i], inputs, ARRAY_LEN(inputs));
+        if (rebuild < 0) {
+            cmd_free(cmd);
+            return false;
+        }
+        if (rebuild == 0) continue;
+
+        nob_cc(&cmd);
+#if defined(__APPLE__)
+        if (i == 1) cmd_append(&cmd, "-x", "objective-c");
+#endif
+        cmd_append(&cmd, "-c", sources[i], "-o", objects[i], "-std=c99", "-O2",
                    "-DPLATFORM_DESKTOP_GLFW", "-DGRAPHICS_API_OPENGL_33",
-                   "-D_GLFW_X11", "-DSUPPORT_MODULE_RMODELS=0",
-                   "-DSUPPORT_MODULE_RAUDIO=0", "-DSUPPORT_FILEFORMAT_JPG=1");
-
-        if (i == 1) cmd_append(&cmd, "-U_GNU_SOURCE");
-
-        cmd_append(&cmd, "-Wall", "-Wno-missing-braces", "-fno-strict-aliasing",
-                   "-I", "thirdparty/raylib/include", "-I",
-                   "thirdparty/raylib/src", "-I",
+                   "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
+                   "-DSUPPORT_FILEFORMAT_JPG=1", "-Wall", "-Wno-missing-braces",
+                   "-fno-strict-aliasing", "-I", "thirdparty/raylib/src", "-I",
                    "thirdparty/raylib/src/external/glfw/include");
+
+#if defined(_WIN32)
+        cmd_append(&cmd, "-D_GLFW_WIN32");
+#elif defined(__APPLE__)
+        cmd_append(&cmd, "-D_GLFW_COCOA", "-fPIC");
+#else
+        cmd_append(&cmd, "-D_GNU_SOURCE", "-D_GLFW_X11", "-fPIC");
+        if (i == 1) cmd_append(&cmd, "-U_GNU_SOURCE");
+#endif
 
         if (!cmd_run(&cmd)) {
             cmd_free(cmd);
@@ -77,59 +82,21 @@ static bool rebuild_raylib(void)
         }
     }
 
-    const char *shared = "thirdparty/raylib/lib/libraylib.so.new";
-    const char *archive = "thirdparty/raylib/lib/libraylib.a.new";
-
-    cmd_append(&cmd, "cc", "-shared", "-o", shared);
-
-    for (size_t i = 0; i < ARRAY_LEN(objects); ++i) {
-        cmd_append(&cmd, objects[i]);
-    }
-
-    append_system_libraries(&cmd);
-
-    if (!cmd_run(&cmd)) {
+    const char *library = "build/cache/libraylib.a";
+    int rebuild =
+        force ? 1 : needs_rebuild(library, objects, ARRAY_LEN(objects));
+    if (rebuild < 0) {
         cmd_free(cmd);
         return false;
     }
 
-    cmd_append(&cmd, "strip", "--strip-unneeded", shared);
-
-    if (!cmd_run(&cmd)) {
-        cmd_free(cmd);
-        return false;
-    }
-
-    if (remove(archive) != 0 && errno != ENOENT) {
-        nob_log(ERROR, "Could not replace %s: %s", archive, strerror(errno));
-        cmd_free(cmd);
-        return false;
-    }
-
-    cmd_append(&cmd, "ar", "rcs", archive);
-
-    for (size_t i = 0; i < ARRAY_LEN(objects); ++i) {
-        cmd_append(&cmd, objects[i]);
-    }
-
-    if (!cmd_run(&cmd)) {
-        cmd_free(cmd);
-        return false;
-    }
-
-    cmd_append(&cmd, "strip", "--strip-debug", archive);
-
-    if (!cmd_run(&cmd)) {
-        cmd_free(cmd);
-        return false;
-    }
-
-    if (rename(shared, "thirdparty/raylib/lib/libraylib.so") != 0 ||
-        rename(archive, "thirdparty/raylib/lib/libraylib.a") != 0) {
-        nob_log(ERROR, "Could not install prebuilt raylib libraries: %s",
-                strerror(errno));
-        cmd_free(cmd);
-        return false;
+    if (rebuild > 0) {
+        cmd_append(&cmd, "ar", "rcs", library);
+        da_append_many(&cmd, objects, ARRAY_LEN(objects));
+        if (!cmd_run(&cmd)) {
+            cmd_free(cmd);
+            return false;
+        }
     }
 
     cmd_free(cmd);
@@ -159,7 +126,7 @@ static const char *svg_inputs[] = {
     "src/svg.c",
     "src/svg.h",
     "src/log.h",
-    "thirdparty/raylib/include/raylib.h",
+    "thirdparty/raylib/src/raylib.h",
     "thirdparty/nanosvg/nanosvg.h",
     "thirdparty/nanosvg/nanosvgrast.h",
     "nob.c",
@@ -196,7 +163,7 @@ static const char *spectrum_inputs[] = {
 };
 static const char *mp_inputs[] = {
     "src/mp.c",
-    "thirdparty/raylib/include/raylib.h",
+    "thirdparty/raylib/src/raylib.h",
     "thirdparty/miniaudio/miniaudio.h",
     "src/log.h",
     "src/m3u.h",
@@ -221,7 +188,7 @@ static const char *svg_flags[] = {
     "-std=c99",   "-g",
     "-Wall",      "-Wextra",
     "-Wpedantic", "-Werror",
-    "-I",         "thirdparty/raylib/include",
+    "-I",         "thirdparty/raylib/src",
     "-I",         "thirdparty/nanosvg",
 };
 static const char *player_flags[] = {
@@ -232,7 +199,7 @@ static const char *mp_flags[] = {
     "-std=c99",   "-g",
     "-Wall",      "-Wextra",
     "-Wpedantic", "-Werror",
-    "-I",         "thirdparty/raylib/include",
+    "-I",         "thirdparty/raylib/src",
     "-I",         "thirdparty/miniaudio",
 };
 
@@ -295,7 +262,8 @@ static bool compile_unit(const Build_Unit *unit, Procs *procs)
     if (rebuild == 0) return true;
 
     Cmd cmd = {0};
-    cmd_append(&cmd, "cc", "-c", unit->source, "-o", unit->object);
+    nob_cc(&cmd);
+    cmd_append(&cmd, "-c", unit->source, "-o", unit->object);
     da_append_many(&cmd, unit->flags, unit->flag_count);
 
     bool result = cmd_run(&cmd, .async = procs);
@@ -322,12 +290,24 @@ static bool compile_units(const Build_Unit *units, size_t count,
     return result;
 }
 
+#ifdef _WIN32
+#define MP_EXECUTABLE "build/mp.exe"
+#define MP_TEMPORARY_EXECUTABLE "build/mp.exe.new"
+#define MP_CACHE_EXECUTABLE "build/cache/mp.exe"
+#define MP_TEST_EXECUTABLE "build/cache/mp-tests.exe"
+#else
+#define MP_EXECUTABLE "build/mp"
+#define MP_TEMPORARY_EXECUTABLE "build/mp.new"
+#define MP_CACHE_EXECUTABLE "build/cache/mp"
+#define MP_TEST_EXECUTABLE "build/cache/mp-tests"
+#endif
+
 static bool install_executable(const char *source)
 {
-    const char *temporary = "build/mp.new";
+    const char *temporary = MP_TEMPORARY_EXECUTABLE;
 
     FILE *source_file = fopen(source, "rb");
-    FILE *installed_file = fopen("build/mp", "rb");
+    FILE *installed_file = fopen(MP_EXECUTABLE, "rb");
     bool identical = source_file != NULL && installed_file != NULL;
     unsigned char source_buffer[4096];
     unsigned char installed_buffer[4096];
@@ -353,24 +333,20 @@ static bool install_executable(const char *source)
 
     if (!copy_file(source, temporary)) return false;
 
-    if (rename(temporary, "build/mp") != 0) {
-        nob_log(ERROR, "Could not replace build/mp: %s", strerror(errno));
+    if (rename(temporary, MP_EXECUTABLE) != 0) {
+        nob_log(ERROR, "Could not replace %s: %s", MP_EXECUTABLE,
+                strerror(errno));
         return false;
     }
 
     return true;
 }
 
-static bool build_app(Link_Mode mode)
+static bool build_app(void)
 {
     Cmd cmd = {0};
-
-    const char *library = mode == LINK_STATIC
-                              ? "thirdparty/raylib/lib/libraylib.a"
-                              : "build/cache/libraylib.so";
-
-    const char *output = mode == LINK_STATIC ? "build/cache/mp-static"
-                                             : "build/cache/mp-dynamic";
+    const char *library = "build/cache/libraylib.a";
+    const char *output = MP_CACHE_EXECUTABLE;
 
     const char *link_inputs[ARRAY_LEN(app_objects) + 2];
     memcpy(link_inputs, app_objects, sizeof(app_objects));
@@ -385,15 +361,11 @@ static bool build_app(Link_Mode mode)
     }
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-o", output);
+        nob_cc(&cmd);
+        cmd_append(&cmd, "-o", output);
         da_append_many(&cmd, app_objects, ARRAY_LEN(app_objects));
 
-        if (mode == LINK_STATIC) {
-            cmd_append(&cmd, "thirdparty/raylib/lib/libraylib.a");
-        } else {
-            cmd_append(&cmd, "-L", "build/cache", "-lraylib",
-                       "-Wl,-rpath,$ORIGIN/cache");
-        }
+        cmd_append(&cmd, library);
 
         append_system_libraries(&cmd);
 
@@ -425,7 +397,8 @@ static bool run_tests(void)
     Cmd cmd = {0};
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-c", "src/test.c", "-o", "build/cache/test.o",
+        nob_cc(&cmd);
+        cmd_append(&cmd, "-c", "src/test.c", "-o", "build/cache/test.o",
                    "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic",
                    "-Werror", "-I", "src");
 
@@ -439,8 +412,8 @@ static bool run_tests(void)
     memcpy(link_inputs, test_objects, sizeof(test_objects));
     link_inputs[ARRAY_LEN(test_objects)] = "nob.c";
 
-    rebuild = needs_rebuild("build/cache/mp-tests", link_inputs,
-                            ARRAY_LEN(link_inputs));
+    rebuild =
+        needs_rebuild(MP_TEST_EXECUTABLE, link_inputs, ARRAY_LEN(link_inputs));
 
     if (rebuild < 0) {
         cmd_free(cmd);
@@ -448,7 +421,8 @@ static bool run_tests(void)
     }
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-o", "build/cache/mp-tests");
+        nob_cc(&cmd);
+        cmd_append(&cmd, "-o", MP_TEST_EXECUTABLE);
         da_append_many(&cmd, test_objects, ARRAY_LEN(test_objects));
         cmd_append(&cmd, "-lm");
 
@@ -458,7 +432,7 @@ static bool run_tests(void)
         }
     }
 
-    cmd_append(&cmd, "./build/cache/mp-tests");
+    cmd_append(&cmd, MP_TEST_EXECUTABLE);
     bool result = cmd_run(&cmd);
     cmd_free(cmd);
 
@@ -468,7 +442,7 @@ static bool run_tests(void)
 static bool run_app(int argc, char **argv)
 {
     Cmd cmd = {0};
-    cmd_append(&cmd, "./build/mp");
+    cmd_append(&cmd, MP_EXECUTABLE);
 
     while (argc > 0) {
         cmd_append(&cmd, shift(argv, argc));
@@ -487,19 +461,17 @@ int main(int argc, char **argv)
     shift(argv, argc);
 
     Command command = COMMAND_BUILD;
-    Link_Mode mode = LINK_DYNAMIC;
-
     if (argc > 0) {
         const char *argument = shift(argv, argc);
 
         if (strcmp(argument, "static") == 0) {
-            mode = LINK_STATIC;
+            // Kept as a compatibility alias; raylib is now always linked
+            // statically from source.
         } else if (strcmp(argument, "run") == 0) {
             command = COMMAND_RUN;
 
             if (argc > 0 && strcmp(*argv, "static") == 0) {
                 shift(argv, argc);
-                mode = LINK_STATIC;
             }
         } else if (strcmp(argument, "test") == 0) {
             command = COMMAND_TEST;
@@ -520,17 +492,17 @@ int main(int argc, char **argv)
     if (!mkdir_if_not_exists("build")) return 1;
     if (!mkdir_if_not_exists("build/cache")) return 1;
 
-    if (command == COMMAND_RAYLIB) return rebuild_raylib() ? 0 : 1;
+    if (command == COMMAND_RAYLIB) return build_raylib(true) ? 0 : 1;
 
     if (command == COMMAND_TEST) {
         if (!compile_units(app_units, ARRAY_LEN(app_units), true)) return 1;
         return run_tests() ? 0 : 1;
     }
 
-    if (!prepare_raylib(mode)) return 1;
+    if (!build_raylib(false)) return 1;
     if (!compile_units(vendor_units, ARRAY_LEN(vendor_units), false)) return 1;
     if (!compile_units(app_units, ARRAY_LEN(app_units), false)) return 1;
-    if (!build_app(mode)) return 1;
+    if (!build_app()) return 1;
 
     if (command == COMMAND_RUN && !run_app(argc, argv)) return 1;
 
