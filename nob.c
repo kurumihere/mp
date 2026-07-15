@@ -14,9 +14,9 @@ typedef enum {
 } Command;
 
 typedef enum {
-    PLATFORM_LINUX,
-    PLATFORM_WINDOWS,
-    PLATFORM_MACOS,
+    MP_PLATFORM_LINUX,
+    MP_PLATFORM_WINDOWS,
+    MP_PLATFORM_MACOS,
 } Platform;
 
 typedef struct {
@@ -57,9 +57,9 @@ static void append_compiler(Cmd *cmd, const Build_Config *config)
 
 static void append_system_libraries(Cmd *cmd, const Build_Config *config)
 {
-    if (config->platform == PLATFORM_WINDOWS) {
+    if (config->platform == MP_PLATFORM_WINDOWS) {
         cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32");
-    } else if (config->platform == PLATFORM_MACOS) {
+    } else if (config->platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
                    "-framework", "CoreVideo");
@@ -117,7 +117,7 @@ static bool build_raylib(const Build_Config *config, bool force)
         if (rebuild == 0) continue;
 
         append_compiler(&cmd, config);
-        if (config->platform == PLATFORM_MACOS && i == 1) {
+        if (config->platform == MP_PLATFORM_MACOS && i == 1) {
             cmd_append(&cmd, "-x", "objective-c");
         }
         cmd_append(&cmd, "-c", sources[i], "-o", objects[i], "-std=c99", "-O2",
@@ -127,9 +127,9 @@ static bool build_raylib(const Build_Config *config, bool force)
                    "-fno-strict-aliasing", "-I", "thirdparty/raylib/src", "-I",
                    "thirdparty/raylib/src/external/glfw/include");
 
-        if (config->platform == PLATFORM_MACOS) {
+        if (config->platform == MP_PLATFORM_MACOS) {
             cmd_append(&cmd, "-fPIC");
-        } else if (config->platform == PLATFORM_LINUX) {
+        } else if (config->platform == MP_PLATFORM_LINUX) {
             cmd_append(&cmd, "-D_GNU_SOURCE", "-D_GLFW_X11", "-fPIC");
             if (i == 1) cmd_append(&cmd, "-U_GNU_SOURCE");
         }
@@ -534,7 +534,7 @@ static bool configure_build(Build_Config *config, bool run_with_wine)
         nob_log(ERROR, "Wine build is only available on non-Windows hosts");
         return false;
 #else
-        config->platform = PLATFORM_WINDOWS;
+        config->platform = MP_PLATFORM_WINDOWS;
         if (config->cc == NULL) config->cc = "x86_64-w64-mingw32-cc";
         if (environment_tool("AR") == NULL) {
             config->ar = "x86_64-w64-mingw32-ar";
@@ -551,19 +551,19 @@ static bool configure_build(Build_Config *config, bool run_with_wine)
     }
 
 #if defined(_WIN32)
-    config->platform = PLATFORM_WINDOWS;
+    config->platform = MP_PLATFORM_WINDOWS;
     config->executable = "build/mp.exe";
     config->temporary_executable = "build/mp.exe.new";
     config->cache_executable = "build/cache/mp.exe";
     config->test_executable = "build/cache/mp-tests.exe";
 #elif defined(__APPLE__)
-    config->platform = PLATFORM_MACOS;
+    config->platform = MP_PLATFORM_MACOS;
     config->executable = "build/mp";
     config->temporary_executable = "build/mp.new";
     config->cache_executable = "build/cache/mp";
     config->test_executable = "build/cache/mp-tests";
 #else
-    config->platform = PLATFORM_LINUX;
+    config->platform = MP_PLATFORM_LINUX;
     config->executable = "build/mp";
     config->temporary_executable = "build/mp.new";
     config->cache_executable = "build/cache/mp";
