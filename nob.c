@@ -503,7 +503,9 @@ static bool run_tests(const Build_Config *config)
 static bool run_app(const Build_Config *config, int argc, char **argv)
 {
     Cmd cmd = {0};
-    if (config->runner != NULL) cmd_append(&cmd, config->runner);
+    if (config->runner != NULL) {
+        cmd_append(&cmd, "env", "WINEDEBUG=-all", config->runner);
+    }
     cmd_append(&cmd, config->executable);
 
     while (argc > 0) {
