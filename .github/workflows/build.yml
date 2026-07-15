@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      package:
+        description: Package release archives
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      package:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,12 +39,18 @@ jobs:
           - name: linux
             os: ubuntu-24.04
             shell: bash
+            package: linux-x86_64
+            extension: tar.gz
           - name: windows
             os: windows-2025
             shell: msys2 {0}
+            package: windows-x86_64
+            extension: zip
           - name: macos
             os: macos-15
             shell: bash
+            package: macos-arm64
+            extension: tar.gz
 
     steps:
       - name: Check out repository
@@ -72,3 +88,34 @@ jobs:
 
       - name: Run tests
         run: ./nob test
+
+      - name: Package
+        if: inputs.package && runner.os != 'Windows'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package="mp-${version}-${{ matrix.package }}"
+          mkdir -p "dist/${package}"
+          cp build/mp LICENSE README.md "dist/${package}/"
+          cp -R assets "dist/${package}/assets"
+          tar -czf "dist/${package}.tar.gz" -C dist "${package}"
+
+      - name: Package
+        if: inputs.package && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $package = "mp-$version-${{ matrix.package }}"
+          New-Item -ItemType Directory -Path "dist/$package" | Out-Null
+          Copy-Item build/mp.exe, LICENSE, README.md -Destination "dist/$package"
+          Copy-Item assets -Destination "dist/$package/assets" -Recurse
+          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
+
+      - name: Upload package
+        if: inputs.package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/mp-*.${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 1
