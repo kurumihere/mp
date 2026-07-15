@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define NOB_EXPERIMENTAL_TRACE_CMD_RUN_FAIL
 #define NOB_IMPLEMENTATION
 #include "thirdparty/nob.h"
 
@@ -6,6 +7,13 @@ typedef enum {
     LINK_STATIC,
     LINK_DYNAMIC,
 } Link_Mode;
+
+typedef enum {
+    COMMAND_BUILD,
+    COMMAND_RUN,
+    COMMAND_TEST,
+    COMMAND_RAYLIB,
+} Command;
 
 static void append_system_libraries(Cmd *cmd)
 {
@@ -128,289 +136,220 @@ static bool rebuild_raylib(void)
     return true;
 }
 
-static bool build_miniaudio(void)
+typedef struct {
+    const char *source;
+    const char *object;
+    const char **inputs;
+    size_t input_count;
+    const char **flags;
+    size_t flag_count;
+    bool required_by_tests;
+} Build_Unit;
+
+static const char *miniaudio_inputs[] = {
+    "thirdparty/miniaudio/miniaudio.c",
+    "thirdparty/miniaudio/miniaudio.h",
+};
+static const char *nanosvg_inputs[] = {
+    "thirdparty/nanosvg/nanosvg.c",
+    "thirdparty/nanosvg/nanosvg.h",
+    "thirdparty/nanosvg/nanosvgrast.h",
+};
+static const char *svg_inputs[] = {
+    "src/svg.c",
+    "src/svg.h",
+    "src/log.h",
+    "thirdparty/raylib/include/raylib.h",
+    "thirdparty/nanosvg/nanosvg.h",
+    "thirdparty/nanosvg/nanosvgrast.h",
+    "nob.c",
+};
+static const char *log_inputs[] = {"src/log.c", "src/log.h", "nob.c"};
+static const char *player_inputs[] = {
+    "src/player.c", "src/player.h",
+    "src/log.h",    "thirdparty/miniaudio/miniaudio.h",
+    "nob.c",
+};
+static const char *playback_order_inputs[] = {
+    "src/playback_order.c",
+    "src/playback_order.h",
+    "nob.c",
+};
+static const char *playlist_inputs[] = {
+    "src/playlist.c", "src/playlist.h", "src/log.h", "src/metadata.h", "nob.c",
+};
+static const char *m3u_inputs[] = {
+    "src/m3u.c", "src/m3u.h", "src/log.h", "src/playlist.h", "nob.c",
+};
+static const char *session_inputs[] = {
+    "src/session.c", "src/session.h", "src/log.h", "src/playlist.h", "nob.c",
+};
+static const char *metadata_inputs[] = {
+    "src/metadata.c",
+    "src/metadata.h",
+    "nob.c",
+};
+static const char *spectrum_inputs[] = {
+    "src/spectrum.c",
+    "src/spectrum.h",
+    "nob.c",
+};
+static const char *mp_inputs[] = {
+    "src/mp.c",
+    "thirdparty/raylib/include/raylib.h",
+    "thirdparty/miniaudio/miniaudio.h",
+    "src/log.h",
+    "src/m3u.h",
+    "src/metadata.h",
+    "src/playback_order.h",
+    "src/player.h",
+    "src/playlist.h",
+    "src/session.h",
+    "src/spectrum.h",
+    "src/svg.h",
+    "nob.c",
+};
+
+static const char *vendor_flags[] = {"-std=c99", "-g", "-fPIC"};
+static const char *nanosvg_flags[] = {
+    "-std=c99", "-g", "-fPIC", "-I", "thirdparty/nanosvg",
+};
+static const char *app_flags[] = {
+    "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+};
+static const char *svg_flags[] = {
+    "-std=c99",   "-g",
+    "-Wall",      "-Wextra",
+    "-Wpedantic", "-Werror",
+    "-I",         "thirdparty/raylib/include",
+    "-I",         "thirdparty/nanosvg",
+};
+static const char *player_flags[] = {
+    "-std=c99",   "-g",      "-Wall", "-Wextra",
+    "-Wpedantic", "-Werror", "-I",    "thirdparty/miniaudio",
+};
+static const char *mp_flags[] = {
+    "-std=c99",   "-g",
+    "-Wall",      "-Wextra",
+    "-Wpedantic", "-Werror",
+    "-I",         "thirdparty/raylib/include",
+    "-I",         "thirdparty/miniaudio",
+};
+
+#define UNIT(source_, object_, inputs_, flags_, tests_)                        \
+    {source_, object_,           inputs_, ARRAY_LEN(inputs_),                  \
+     flags_,  ARRAY_LEN(flags_), tests_}
+
+static const Build_Unit vendor_units[] = {
+    UNIT("thirdparty/miniaudio/miniaudio.c", "build/cache/miniaudio.o",
+         miniaudio_inputs, vendor_flags, false),
+    UNIT("thirdparty/nanosvg/nanosvg.c", "build/cache/nanosvg.o",
+         nanosvg_inputs, nanosvg_flags, false),
+};
+
+static const Build_Unit app_units[] = {
+    UNIT("src/mp.c", "build/cache/mp.o", mp_inputs, mp_flags, false),
+    UNIT("src/svg.c", "build/cache/svg.o", svg_inputs, svg_flags, false),
+    UNIT("src/log.c", "build/cache/log.o", log_inputs, app_flags, true),
+    UNIT("src/player.c", "build/cache/player.o", player_inputs, player_flags,
+         false),
+    UNIT("src/playback_order.c", "build/cache/playback_order.o",
+         playback_order_inputs, app_flags, true),
+    UNIT("src/playlist.c", "build/cache/playlist.o", playlist_inputs, app_flags,
+         true),
+    UNIT("src/m3u.c", "build/cache/m3u.o", m3u_inputs, app_flags, true),
+    UNIT("src/session.c", "build/cache/session.o", session_inputs, app_flags,
+         true),
+    UNIT("src/metadata.c", "build/cache/metadata.o", metadata_inputs, app_flags,
+         true),
+    UNIT("src/spectrum.c", "build/cache/spectrum.o", spectrum_inputs, app_flags,
+         true),
+};
+
+static const char *app_objects[] = {
+    "build/cache/mp.o",       "build/cache/miniaudio.o",
+    "build/cache/nanosvg.o",  "build/cache/log.o",
+    "build/cache/m3u.o",      "build/cache/metadata.o",
+    "build/cache/player.o",   "build/cache/playback_order.o",
+    "build/cache/playlist.o", "build/cache/session.o",
+    "build/cache/spectrum.o", "build/cache/svg.o",
+};
+
+static const char *test_objects[] = {
+    "build/cache/test.o",
+    "build/cache/log.o",
+    "build/cache/m3u.o",
+    "build/cache/metadata.o",
+    "build/cache/playback_order.o",
+    "build/cache/playlist.o",
+    "build/cache/session.o",
+    "build/cache/spectrum.o",
+};
+
+#undef UNIT
+
+static bool compile_unit(const Build_Unit *unit, Procs *procs)
 {
-    const char *inputs[] = {
-        "thirdparty/miniaudio/miniaudio.c",
-        "thirdparty/miniaudio/miniaudio.h",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/miniaudio.o", inputs, ARRAY_LEN(inputs));
-
+    int rebuild = needs_rebuild(unit->object, unit->inputs, unit->input_count);
     if (rebuild < 0) return false;
     if (rebuild == 0) return true;
 
     Cmd cmd = {0};
+    cmd_append(&cmd, "cc", "-c", unit->source, "-o", unit->object);
+    da_append_many(&cmd, unit->flags, unit->flag_count);
 
-    cmd_append(&cmd, "cc", "-c", "thirdparty/miniaudio/miniaudio.c", "-o",
-               "build/cache/miniaudio.o");
-
-    cmd_append(&cmd, "-std=c99", "-g", "-fPIC");
-
-    bool result = cmd_run(&cmd);
+    bool result = cmd_run(&cmd, .async = procs);
     cmd_free(cmd);
-
     return result;
 }
 
-static bool build_nanosvg(void)
+static bool compile_units(const Build_Unit *units, size_t count,
+                          bool tests_only)
 {
-    const char *inputs[] = {
-        "thirdparty/nanosvg/nanosvg.c",
-        "thirdparty/nanosvg/nanosvg.h",
-        "thirdparty/nanosvg/nanosvgrast.h",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/nanosvg.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "thirdparty/nanosvg/nanosvg.c", "-o",
-               "build/cache/nanosvg.o", "-std=c99", "-g", "-fPIC", "-I",
-               "thirdparty/nanosvg");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_svg(void)
-{
-    const char *inputs[] = {
-        "src/svg.c",
-        "src/svg.h",
-        "src/log.h",
-        "thirdparty/raylib/include/raylib.h",
-        "thirdparty/nanosvg/nanosvg.h",
-        "thirdparty/nanosvg/nanosvgrast.h",
-        "nob.c",
-    };
-
-    int rebuild = needs_rebuild("build/cache/svg.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/svg.c", "-o", "build/cache/svg.o",
-               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
-               "-I", "thirdparty/raylib/include", "-I", "thirdparty/nanosvg");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_log(void)
-{
-    const char *inputs[] = {
-        "src/log.c",
-        "src/log.h",
-        "nob.c",
-    };
-
-    int rebuild = needs_rebuild("build/cache/log.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/log.c", "-o", "build/cache/log.o",
-               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_player(void)
-{
-    const char *inputs[] = {
-        "src/player.c", "src/player.h",
-        "src/log.h",    "thirdparty/miniaudio/miniaudio.h",
-        "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/player.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/player.c", "-o", "build/cache/player.o",
-               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
-               "-I", "thirdparty/miniaudio");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_playback_order(void)
-{
-    const char *inputs[] = {
-        "src/playback_order.c",
-        "src/playback_order.h",
-        "nob.c",
-    };
-
-    int rebuild = needs_rebuild("build/cache/playback_order.o", inputs,
-                                ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/playback_order.c", "-o",
-               "build/cache/playback_order.o", "-std=c99", "-g", "-Wall",
-               "-Wextra", "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_playlist(void)
-{
-    const char *inputs[] = {
-        "src/playlist.c", "src/playlist.h", "src/log.h",
-        "src/metadata.h", "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/playlist.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/playlist.c", "-o",
-               "build/cache/playlist.o", "-std=c99", "-g", "-Wall", "-Wextra",
-               "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_m3u(void)
-{
-    const char *inputs[] = {
-        "src/m3u.c", "src/m3u.h", "src/log.h", "src/playlist.h", "nob.c",
-    };
-
-    int rebuild = needs_rebuild("build/cache/m3u.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/m3u.c", "-o", "build/cache/m3u.o",
-               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_session(void)
-{
-    const char *inputs[] = {
-        "src/session.c",  "src/session.h", "src/log.h",
-        "src/playlist.h", "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/session.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/session.c", "-o", "build/cache/session.o",
-               "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_metadata(void)
-{
-    const char *inputs[] = {
-        "src/metadata.c",
-        "src/metadata.h",
-        "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/metadata.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/metadata.c", "-o",
-               "build/cache/metadata.o", "-std=c99", "-g", "-Wall", "-Wextra",
-               "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
-    return result;
-}
-
-static bool build_spectrum(void)
-{
-    const char *inputs[] = {
-        "src/spectrum.c",
-        "src/spectrum.h",
-        "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/spectrum.o", inputs, ARRAY_LEN(inputs));
-
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return true;
-
-    Cmd cmd = {0};
-
-    cmd_append(&cmd, "cc", "-c", "src/spectrum.c", "-o",
-               "build/cache/spectrum.o", "-std=c99", "-g", "-Wall", "-Wextra",
-               "-Wpedantic", "-Werror");
-
-    bool result = cmd_run(&cmd);
-    cmd_free(cmd);
-
+    Procs procs = {0};
+    bool result = true;
+
+    for (size_t i = 0; i < count; ++i) {
+        if (tests_only && !units[i].required_by_tests) continue;
+        if (!compile_unit(&units[i], &procs)) {
+            result = false;
+            break;
+        }
+    }
+
+    if (!procs_flush(&procs)) result = false;
+    da_free(procs);
     return result;
 }
 
 static bool install_executable(const char *source)
 {
     const char *temporary = "build/mp.new";
+
+    FILE *source_file = fopen(source, "rb");
+    FILE *installed_file = fopen("build/mp", "rb");
+    bool identical = source_file != NULL && installed_file != NULL;
+    unsigned char source_buffer[4096];
+    unsigned char installed_buffer[4096];
+
+    while (identical) {
+        size_t source_count =
+            fread(source_buffer, 1, sizeof(source_buffer), source_file);
+        size_t installed_count = fread(
+            installed_buffer, 1, sizeof(installed_buffer), installed_file);
+
+        if (source_count != installed_count ||
+            memcmp(source_buffer, installed_buffer, source_count) != 0) {
+            identical = false;
+            break;
+        }
+
+        if (source_count < sizeof(source_buffer)) break;
+    }
+
+    if (source_file != NULL) fclose(source_file);
+    if (installed_file != NULL) fclose(installed_file);
+    if (identical) return true;
 
     if (!copy_file(source, temporary)) return false;
 
@@ -426,45 +365,6 @@ static bool build_app(Link_Mode mode)
 {
     Cmd cmd = {0};
 
-    const char *app_inputs[] = {
-        "src/mp.c",
-        "thirdparty/raylib/include/raylib.h",
-        "thirdparty/miniaudio/miniaudio.h",
-        "src/log.h",
-        "src/m3u.h",
-        "src/metadata.h",
-        "src/playback_order.h",
-        "src/player.h",
-        "src/playlist.h",
-        "src/session.h",
-        "src/spectrum.h",
-        "src/svg.h",
-        "nob.c",
-    };
-
-    int rebuild =
-        needs_rebuild("build/cache/mp.o", app_inputs, ARRAY_LEN(app_inputs));
-
-    if (rebuild < 0) {
-        cmd_free(cmd);
-        return false;
-    }
-
-    if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-c", "src/mp.c", "-o", "build/cache/mp.o");
-
-        cmd_append(&cmd, "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic",
-                   "-Werror");
-
-        cmd_append(&cmd, "-I", "thirdparty/raylib/include", "-I",
-                   "thirdparty/miniaudio");
-
-        if (!cmd_run(&cmd)) {
-            cmd_free(cmd);
-            return false;
-        }
-    }
-
     const char *library = mode == LINK_STATIC
                               ? "thirdparty/raylib/lib/libraylib.a"
                               : "build/cache/libraylib.so";
@@ -472,24 +372,12 @@ static bool build_app(Link_Mode mode)
     const char *output = mode == LINK_STATIC ? "build/cache/mp-static"
                                              : "build/cache/mp-dynamic";
 
-    const char *link_inputs[] = {
-        "build/cache/mp.o",
-        "build/cache/miniaudio.o",
-        "build/cache/nanosvg.o",
-        "build/cache/log.o",
-        "build/cache/m3u.o",
-        "build/cache/metadata.o",
-        "build/cache/player.o",
-        "build/cache/playback_order.o",
-        "build/cache/playlist.o",
-        "build/cache/session.o",
-        "build/cache/spectrum.o",
-        "build/cache/svg.o",
-        library,
-        "nob.c",
-    };
+    const char *link_inputs[ARRAY_LEN(app_objects) + 2];
+    memcpy(link_inputs, app_objects, sizeof(app_objects));
+    link_inputs[ARRAY_LEN(app_objects)] = library;
+    link_inputs[ARRAY_LEN(app_objects) + 1] = "nob.c";
 
-    rebuild = needs_rebuild(output, link_inputs, ARRAY_LEN(link_inputs));
+    int rebuild = needs_rebuild(output, link_inputs, ARRAY_LEN(link_inputs));
 
     if (rebuild < 0) {
         cmd_free(cmd);
@@ -497,13 +385,8 @@ static bool build_app(Link_Mode mode)
     }
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-o", output, "build/cache/mp.o",
-                   "build/cache/miniaudio.o", "build/cache/nanosvg.o",
-                   "build/cache/log.o", "build/cache/m3u.o",
-                   "build/cache/player.o", "build/cache/playback_order.o",
-                   "build/cache/playlist.o", "build/cache/session.o",
-                   "build/cache/spectrum.o", "build/cache/svg.o",
-                   "build/cache/metadata.o");
+        cmd_append(&cmd, "cc", "-o", output);
+        da_append_many(&cmd, app_objects, ARRAY_LEN(app_objects));
 
         if (mode == LINK_STATIC) {
             cmd_append(&cmd, "thirdparty/raylib/lib/libraylib.a");
@@ -529,7 +412,7 @@ static bool build_app(Link_Mode mode)
 static bool run_tests(void)
 {
     const char *test_inputs[] = {
-        "tests/test.c",         "src/m3u.h",      "src/metadata.h",
+        "src/test.c",           "src/m3u.h",      "src/metadata.h",
         "src/playback_order.h", "src/playlist.h", "src/session.h",
         "src/spectrum.h",       "nob.c",
     };
@@ -542,7 +425,7 @@ static bool run_tests(void)
     Cmd cmd = {0};
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-c", "tests/test.c", "-o", "build/cache/test.o",
+        cmd_append(&cmd, "cc", "-c", "src/test.c", "-o", "build/cache/test.o",
                    "-std=c99", "-g", "-Wall", "-Wextra", "-Wpedantic",
                    "-Werror", "-I", "src");
 
@@ -552,17 +435,9 @@ static bool run_tests(void)
         }
     }
 
-    const char *link_inputs[] = {
-        "build/cache/test.o",
-        "build/cache/log.o",
-        "build/cache/m3u.o",
-        "build/cache/metadata.o",
-        "build/cache/playback_order.o",
-        "build/cache/playlist.o",
-        "build/cache/session.o",
-        "build/cache/spectrum.o",
-        "nob.c",
-    };
+    const char *link_inputs[ARRAY_LEN(test_objects) + 1];
+    memcpy(link_inputs, test_objects, sizeof(test_objects));
+    link_inputs[ARRAY_LEN(test_objects)] = "nob.c";
 
     rebuild = needs_rebuild("build/cache/mp-tests", link_inputs,
                             ARRAY_LEN(link_inputs));
@@ -573,11 +448,9 @@ static bool run_tests(void)
     }
 
     if (rebuild > 0) {
-        cmd_append(&cmd, "cc", "-o", "build/cache/mp-tests",
-                   "build/cache/test.o", "build/cache/log.o",
-                   "build/cache/m3u.o", "build/cache/metadata.o",
-                   "build/cache/playback_order.o", "build/cache/playlist.o",
-                   "build/cache/session.o", "build/cache/spectrum.o", "-lm");
+        cmd_append(&cmd, "cc", "-o", "build/cache/mp-tests");
+        da_append_many(&cmd, test_objects, ARRAY_LEN(test_objects));
+        cmd_append(&cmd, "-lm");
 
         if (!cmd_run(&cmd)) {
             cmd_free(cmd);
@@ -613,10 +486,8 @@ int main(int argc, char **argv)
 
     shift(argv, argc);
 
+    Command command = COMMAND_BUILD;
     Link_Mode mode = LINK_DYNAMIC;
-    bool should_run = false;
-    bool should_test = false;
-    bool should_rebuild_raylib = false;
 
     if (argc > 0) {
         const char *argument = shift(argv, argc);
@@ -624,16 +495,16 @@ int main(int argc, char **argv)
         if (strcmp(argument, "static") == 0) {
             mode = LINK_STATIC;
         } else if (strcmp(argument, "run") == 0) {
-            should_run = true;
+            command = COMMAND_RUN;
 
             if (argc > 0 && strcmp(*argv, "static") == 0) {
                 shift(argv, argc);
                 mode = LINK_STATIC;
             }
         } else if (strcmp(argument, "test") == 0) {
-            should_test = true;
+            command = COMMAND_TEST;
         } else if (strcmp(argument, "raylib") == 0) {
-            should_rebuild_raylib = true;
+            command = COMMAND_RAYLIB;
         } else {
             nob_log(ERROR, "Unknown subcommand: %s", argument);
             nob_log(INFO, "Usage: ./nob [static|test|raylib|run [static]]");
@@ -641,7 +512,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if ((!should_run || should_test) && argc > 0) {
+    if (command != COMMAND_RUN && argc > 0) {
         nob_log(ERROR, "Unexpected argument: %s", shift(argv, argc));
         return 1;
     }
@@ -649,34 +520,19 @@ int main(int argc, char **argv)
     if (!mkdir_if_not_exists("build")) return 1;
     if (!mkdir_if_not_exists("build/cache")) return 1;
 
-    if (should_rebuild_raylib) return rebuild_raylib() ? 0 : 1;
+    if (command == COMMAND_RAYLIB) return rebuild_raylib() ? 0 : 1;
 
-    if (should_test) {
-        if (!build_log()) return 1;
-        if (!build_metadata()) return 1;
-        if (!build_playback_order()) return 1;
-        if (!build_playlist()) return 1;
-        if (!build_m3u()) return 1;
-        if (!build_session()) return 1;
-        if (!build_spectrum()) return 1;
+    if (command == COMMAND_TEST) {
+        if (!compile_units(app_units, ARRAY_LEN(app_units), true)) return 1;
         return run_tests() ? 0 : 1;
     }
 
     if (!prepare_raylib(mode)) return 1;
-    if (!build_miniaudio()) return 1;
-    if (!build_nanosvg()) return 1;
-    if (!build_log()) return 1;
-    if (!build_metadata()) return 1;
-    if (!build_player()) return 1;
-    if (!build_playback_order()) return 1;
-    if (!build_playlist()) return 1;
-    if (!build_m3u()) return 1;
-    if (!build_session()) return 1;
-    if (!build_spectrum()) return 1;
-    if (!build_svg()) return 1;
+    if (!compile_units(vendor_units, ARRAY_LEN(vendor_units), false)) return 1;
+    if (!compile_units(app_units, ARRAY_LEN(app_units), false)) return 1;
     if (!build_app(mode)) return 1;
 
-    if (should_run && !run_app(argc, argv)) return 1;
+    if (command == COMMAND_RUN && !run_app(argc, argv)) return 1;
 
     return 0;
 }

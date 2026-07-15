@@ -27,7 +27,7 @@ miniaudio, NanoSVG, and the build helper are vendored in `thirdparty/`.
 Bootstrap the build tool after cloning:
 
 ```sh
-cc -std=c99 -o nob nob.c
+cc -o nob nob.c
 ```
 
 Build the default dynamically linked raylib configuration:
