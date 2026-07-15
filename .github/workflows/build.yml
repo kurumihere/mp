@@ -11,19 +11,37 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: ubuntu
             os: ubuntu-latest
+            shell: bash
           - name: windows
             os: windows-latest
+            shell: msys2 {0}
           - name: macos
             os: macos-latest
+            shell: bash
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev
 
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -34,16 +52,6 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc
 
       - name: Build and test
-        if: runner.os != 'Windows'
-        run: |
-          cc -std=c99 -o nob nob.c
-          ./nob
-          ./nob
-          ./nob test
-
-      - name: Build and test
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
         run: |
           cc -std=c99 -o nob nob.c
           ./nob
