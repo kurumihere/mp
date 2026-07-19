@@ -7,6 +7,7 @@ typedef enum {
     ERROR,
 } Log_Level;
 
+void mp_log_set_level(Log_Level level);
 void mp_log(Log_Level level, const char *format, ...);
 
 #endif

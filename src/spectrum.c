@@ -108,6 +108,23 @@ void spectrum_init(Spectrum *spectrum)
     }
 }
 
+void spectrum_decay(Spectrum *spectrum, float delta_time)
+{
+    float frame_time = clamp_float(delta_time, 0.0f, 0.05f);
+
+    for (size_t bar = 0; bar < spectrum->bar_count; ++bar) {
+        spectrum->levels[bar] =
+            smooth_level(spectrum->levels[bar], 0.0f,
+                         &spectrum->velocities[bar], frame_time);
+
+        if (spectrum->levels[bar] < 0.001f &&
+            fabsf(spectrum->velocities[bar]) < 0.01f) {
+            spectrum->levels[bar] = 0.0f;
+            spectrum->velocities[bar] = 0.0f;
+        }
+    }
+}
+
 void spectrum_reset(Spectrum *spectrum)
 {
     memset(spectrum->levels, 0, sizeof(spectrum->levels));

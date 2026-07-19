@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "assets.h"
 #include "log.h"
 #include "m3u.h"
 #include "metadata.h"
@@ -15,10 +16,26 @@
 #include "spectrum.h"
 #include "svg.h"
 
-#define ASSET_PATH_SIZE 4096
+#define FONT_MIN_SIZE 20
+#define FONT_MAX_SIZE 60
+#define FONT_SIZE_STEP 10
+#define FONT_COUNT ((FONT_MAX_SIZE - FONT_MIN_SIZE) / FONT_SIZE_STEP + 1)
+#define MP_VERSION "0.1.1"
+#define PLAYLIST_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
+#define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
+#define SEEK_STEP_SECONDS 5.0f
 #define SESSION_PATH_SIZE 4096
-#define SPECTRUM_DISPLAY_MAX_BARS 32
+#define SPECTRUM_DISPLAY_MAX_BARS 64
+#define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
+#define UI_BUTTON_ICON_SIZE 72
+#define UI_TOGGLE_ICON_SIZE 48
+#define WINDOW_HEIGHT 700
+#define WINDOW_MIN_HEIGHT 480
+#define WINDOW_MIN_WIDTH 640
+#define WINDOW_WIDTH 1000
+
+static Font fonts[FONT_COUNT];
 
 #if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
 #error Player analysis and spectrum sample counts must match
@@ -72,6 +89,12 @@ static bool update_input_paths(Playlist *playlist, const char *const *paths,
          !playlist_append(&replacement, (const char *const *)playlist->paths,
                           playlist->count)) ||
         !append_inputs_in_place(&replacement, paths, count)) {
+        playlist_uninit(&replacement);
+        return false;
+    }
+
+    if (!replace && playlist_get_count(playlist) > 0 &&
+        !playlist_select(&replacement, playlist_get_current(playlist))) {
         playlist_uninit(&replacement);
         return false;
     }
@@ -194,8 +217,6 @@ typedef struct {
     Texture2D shuffle;
     Texture2D playlist_back;
     Texture2D playlist_forward;
-    int button_size;
-    int toggle_size;
 } Ui_Icons;
 
 typedef struct {
@@ -246,84 +267,156 @@ static void unload_ui_icons(Ui_Icons *icons)
     *icons = (Ui_Icons){0};
 }
 
-static bool make_asset_path(char *path, size_t capacity, const char *directory,
-                            const char *name)
+static bool set_window_icon(void)
 {
-    int written = snprintf(path, capacity, "%s/%s", directory, name);
+    Embedded_Asset asset = asset_get(ASSET_ICON_PNG);
 
-    return written >= 0 && (size_t)written < capacity;
-}
-
-static bool asset_directory_valid(const char *directory)
-{
-    char path[ASSET_PATH_SIZE];
-
-    return make_asset_path(path, sizeof(path), directory, "play.svg") &&
-           FileExists(path);
-}
-
-static bool resolve_asset_directory(char *directory, size_t capacity)
-{
-    if (asset_directory_valid("assets")) {
-        int written = snprintf(directory, capacity, "assets");
-        return written >= 0 && (size_t)written < capacity;
+    if (asset.data == NULL || asset.size > INT_MAX) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
+        return false;
     }
 
-    const char *application_directory = GetApplicationDirectory();
-    const char *relative_directories[] = {"assets", "../assets"};
+    Image icon = LoadImageFromMemory(".png", asset.data, (int)asset.size);
 
-    for (size_t i = 0;
-         i < sizeof(relative_directories) / sizeof(relative_directories[0]);
-         ++i) {
-        int written = snprintf(directory, capacity, "%s%s",
-                               application_directory, relative_directories[i]);
+    if (!IsImageValid(icon)) {
+        mp_log(ERROR, "failed to load application icon: %s", asset.name);
+        return false;
+    }
 
-        if (written >= 0 && (size_t)written < capacity &&
-            asset_directory_valid(directory)) {
-            return true;
+    ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+    if (!IsImageValid(icon) ||
+        icon.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
+        mp_log(ERROR, "failed to convert application icon: %s", asset.name);
+        UnloadImage(icon);
+        return false;
+    }
+
+    SetWindowIcon(icon);
+    UnloadImage(icon);
+    return true;
+}
+
+static void unload_fonts(void)
+{
+    for (int i = 0; i < FONT_COUNT; ++i) {
+        if (IsFontValid(fonts[i])) UnloadFont(fonts[i]);
+        fonts[i] = (Font){0};
+    }
+}
+
+static bool load_fonts(void)
+{
+    Embedded_Asset asset = asset_get(ASSET_OPEN_SANS_REGULAR_TTF);
+
+    if (asset.data == NULL || asset.size > INT_MAX) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
+        return false;
+    }
+
+    int codepoints[1024];
+    int codepoint_count = 0;
+    const int ranges[][2] = {
+        {0x0020, 0x007e},
+        {0x00a0, 0x017f},
+        {0x0400, 0x0486},
+        {0x0488, 0x0513},
+        {0x2000, 0x200b},
+        {0x2013, 0x2015},
+        {0x2017, 0x201e},
+        {0x2020, 0x2022},
+        {0x2026, 0x2026},
+        {0x2030, 0x2030},
+        {0x2032, 0x2033},
+        {0x2039, 0x203a},
+        {0x203c, 0x203c},
+        {0x2044, 0x2044},
+    };
+
+    for (size_t range = 0; range < sizeof(ranges) / sizeof(ranges[0]);
+         ++range) {
+        for (int codepoint = ranges[range][0]; codepoint <= ranges[range][1];
+             ++codepoint) {
+            codepoints[codepoint_count++] = codepoint;
         }
     }
 
-    return false;
+    for (int i = 0; i < FONT_COUNT; ++i) {
+        int font_size = FONT_MIN_SIZE + i * FONT_SIZE_STEP;
+        Font font = LoadFontFromMemory(".ttf", asset.data, (int)asset.size,
+                                       font_size, codepoints, codepoint_count);
+
+        if (!IsFontValid(font) || !IsTextureValid(font.texture) ||
+            font.baseSize != font_size) {
+            mp_log(ERROR, "failed to load font at %d px: %s", font_size,
+                   asset.name);
+            if (IsFontValid(font)) UnloadFont(font);
+            unload_fonts();
+            return false;
+        }
+
+        SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
+        fonts[i] = font;
+    }
+
+    return true;
 }
 
-static Texture2D load_asset_texture(const char *directory, const char *name,
-                                    int size, float content_scale)
+static Font font_for_size(int font_size)
 {
-    char path[ASSET_PATH_SIZE];
+    int index = (font_size - FONT_MIN_SIZE) / FONT_SIZE_STEP;
 
-    if (!make_asset_path(path, sizeof(path), directory, name)) {
-        mp_log(ERROR, "asset path is too long: %s", name);
+    if (index < 0) index = 0;
+    if (index >= FONT_COUNT) index = FONT_COUNT - 1;
+
+    return fonts[index];
+}
+
+static int measure_text(const char *text, int font_size)
+{
+    Font font = font_for_size(font_size);
+    return (int)roundf(MeasureTextEx(font, text, (float)font_size, 0.0f).x);
+}
+
+static void draw_text(const char *text, int x, int y, int font_size,
+                      Color color)
+{
+    DrawTextEx(font_for_size(font_size), text, (Vector2){(float)x, (float)y},
+               (float)font_size, 0.0f, color);
+}
+
+static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
+{
+    Embedded_Asset asset = asset_get(id);
+
+    if (asset.data == NULL) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
         return (Texture2D){0};
     }
 
-    return svg_load_texture(path, size, content_scale);
+    return svg_load_texture(asset.name, asset.data, asset.size, size,
+                            content_scale);
 }
 
-static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory,
-                            int button_size, int toggle_size)
+static bool create_ui_icons(Ui_Icons *icons)
 {
     *icons = (Ui_Icons){
-        .back =
-            load_asset_texture(asset_directory, "back.svg", button_size, 0.74f),
-        .forward = load_asset_texture(asset_directory, "forward.svg",
-                                      button_size, 0.74f),
-        .pause = load_asset_texture(asset_directory, "pause.svg", button_size,
-                                    0.72f),
-        .play =
-            load_asset_texture(asset_directory, "play.svg", button_size, 0.72f),
-        .repeat = load_asset_texture(asset_directory, "repeat.svg", button_size,
-                                     0.68f),
-        .repeat_one = load_asset_texture(asset_directory, "repeat-one.svg",
-                                         button_size, 0.68f),
-        .shuffle = load_asset_texture(asset_directory, "shuffle.svg",
-                                      button_size, 0.68f),
+        .back = load_asset_texture(ASSET_BACK_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
+        .forward =
+            load_asset_texture(ASSET_FORWARD_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
+        .pause =
+            load_asset_texture(ASSET_PAUSE_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
+        .play = load_asset_texture(ASSET_PLAY_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
+        .repeat =
+            load_asset_texture(ASSET_REPEAT_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
+        .repeat_one = load_asset_texture(ASSET_REPEAT_ONE_SVG,
+                                         UI_BUTTON_ICON_SIZE, 0.68f),
+        .shuffle =
+            load_asset_texture(ASSET_SHUFFLE_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
         .playlist_back =
-            load_asset_texture(asset_directory, "back.svg", toggle_size, 0.88f),
-        .playlist_forward = load_asset_texture(asset_directory, "forward.svg",
-                                               toggle_size, 0.88f),
-        .button_size = button_size,
-        .toggle_size = toggle_size,
+            load_asset_texture(ASSET_BACK_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
+        .playlist_forward =
+            load_asset_texture(ASSET_FORWARD_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
     };
 
     Texture2D textures[] = {
@@ -342,32 +435,23 @@ static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory,
     return true;
 }
 
-static bool update_ui_icons(Ui_Icons *icons, const char *asset_directory,
-                            int button_size, int toggle_size)
-{
-    if (icons->button_size == button_size &&
-        icons->toggle_size == toggle_size) {
-        return true;
-    }
-
-    Ui_Icons replacement;
-
-    if (!create_ui_icons(&replacement, asset_directory, button_size,
-                         toggle_size)) {
-        return false;
-    }
-
-    unload_ui_icons(icons);
-    *icons = replacement;
-    return true;
-}
-
 static float clamp_float(float value, float minimum, float maximum)
 {
     if (value < minimum) return minimum;
     if (value > maximum) return maximum;
 
     return value;
+}
+
+static float animate_towards(float current, float target, float speed,
+                             float delta_time)
+{
+    float frame_time = clamp_float(delta_time, 0.0f, 0.05f);
+    float result = target + (current - target) * expf(-speed * frame_time);
+
+    if (fabsf(result - target) < 0.001f) return target;
+
+    return result;
 }
 
 static float snap_pixel(float value)
@@ -537,10 +621,10 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
                                 int font_size, float scale, Color color,
                                 bool scrolling, double started_at)
 {
-    int text_width = MeasureText(text, font_size);
+    int text_width = measure_text(text, font_size);
 
     if ((float)text_width <= bounds.width) {
-        DrawText(text, (int)bounds.x, (int)bounds.y, font_size, color);
+        draw_text(text, (int)bounds.x, (int)bounds.y, font_size, color);
         return;
     }
 
@@ -569,8 +653,8 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
 
     BeginScissorMode((int)bounds.x, (int)bounds.y, (int)bounds.width,
                      (int)bounds.height);
-    DrawText(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
-             font_size, color);
+    draw_text(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
+              font_size, color);
     EndScissorMode();
 }
 
@@ -584,8 +668,11 @@ static int crisp_font_size(float desired, int minimum, int maximum)
     return size;
 }
 
-static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
+static Ui_Layout make_ui_layout(int width, int height,
+                                float playlist_open_amount)
 {
+    playlist_open_amount = clamp_float(playlist_open_amount, 0.0f, 1.0f);
+
     float horizontal_scale = (float)width / 1000.0f;
     float vertical_scale = (float)height / 700.0f;
     float scale =
@@ -642,18 +729,27 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         panel_x = (float)width - panel_width;
     }
 
+    float open_panel_x = panel_x;
+    float open_toggle_x = open_panel_x - gap - toggle_width;
+    float closed_toggle_x = (float)width - toggle_width;
+    panel_x = (float)width +
+              (open_panel_x - (float)width) * playlist_open_amount;
+    float toggle_x = closed_toggle_x +
+                     (open_toggle_x - closed_toggle_x) * playlist_open_amount;
+
     Ui_Layout layout = {
         .scale = scale,
         .width = width,
         .height = height,
-        .title_size = crisp_font_size(32.0f * scale, 20, 50),
-        .status_size = crisp_font_size(18.0f * scale, 10, 30),
+        .title_size = crisp_font_size(38.0f * scale, 30, 60),
+        .status_size = crisp_font_size(25.0f * scale, 20, 40),
         .title_x = padding,
         .title_y = title_y,
         .details_y = snap_pixel(controls_y - 82.0f * scale),
         .metadata_y = snap_pixel(controls_y - 37.0f * scale),
         .playlist_top = snap_pixel(panel_y + 64.0f * scale),
-        .playlist_item_height = snap_pixel(62.0f * scale),
+        .playlist_item_height =
+            snap_pixel(clamp_float(82.0f * scale, 60.0f, 120.0f)),
         .playlist_item_gap = snap_pixel(4.0f * scale),
         .previous_button = {previous_x, controls_y, button_size, button_size},
         .play_button = {play_x, controls_y, button_size, button_size},
@@ -672,8 +768,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
         .playlist_toggle =
             {
-                playlist_open ? panel_x - gap - toggle_width
-                              : (float)width - toggle_width,
+                toggle_x,
                 ((float)height - toggle_height) / 2.0f,
                 toggle_width,
                 toggle_height,
@@ -816,22 +911,22 @@ static void draw_playlist_panel(const Playlist *playlist,
                                 size_t hovered_track, double text_started_at)
 {
     Rectangle panel = layout->playlist_panel;
-    int title_size = crisp_font_size(25.0f * layout->scale, 20, 40);
-    int details_size = crisp_font_size(16.0f * layout->scale, 10, 30);
+    int title_size = crisp_font_size(35.0f * layout->scale, 30, 50);
+    int details_size = crisp_font_size(25.0f * layout->scale, 20, 40);
     size_t count = playlist_get_count(playlist);
     size_t current = playlist_get_current(playlist);
 
     DrawRectangleRec(panel, (Color){24, 24, 24, 255});
     DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
              (int)(panel.y + panel.height), (Color){55, 55, 55, 255});
-    DrawText("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
-             (int)snap_pixel(panel.y + 20.0f * layout->scale),
-             crisp_font_size(26.0f * layout->scale, 20, 40), RAYWHITE);
+    draw_text("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+              (int)snap_pixel(panel.y + 20.0f * layout->scale),
+              crisp_font_size(35.0f * layout->scale, 30, 50), RAYWHITE);
 
     if (count == 0) {
-        DrawText("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
-                 (int)snap_pixel(panel.y + 70.0f * layout->scale),
-                 crisp_font_size(20.0f * layout->scale, 10, 30), GRAY);
+        draw_text("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+                  (int)snap_pixel(panel.y + 70.0f * layout->scale),
+                  crisp_font_size(25.0f * layout->scale, 20, 40), GRAY);
         return;
     }
 
@@ -877,7 +972,7 @@ static void draw_playlist_panel(const Playlist *playlist,
         } else {
             Rectangle title_bounds = {
                 text_x,
-                snap_pixel(item.y + 5.0f * layout->scale),
+                snap_pixel(item.y + 4.0f * layout->scale),
                 text_width,
                 (float)title_size,
             };
@@ -895,7 +990,7 @@ static void draw_playlist_panel(const Playlist *playlist,
 
             Rectangle details_bounds = {
                 text_x,
-                snap_pixel(item.y + 39.0f * layout->scale),
+                snap_pixel(item.y + title_size + 8.0f * layout->scale),
                 text_width,
                 (float)details_size,
             };
@@ -910,18 +1005,96 @@ static void draw_playlist_panel(const Playlist *playlist,
 }
 
 static void draw_playlist_toggle(Rectangle bounds, bool open,
-                                 const Ui_Icons *icons, Vector2 mouse)
+                                 const Ui_Icons *icons, Vector2 mouse,
+                                 float opacity)
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
     Color fill = hovered ? (Color){58, 58, 58, 255} : (Color){36, 36, 36, 255};
 
-    DrawRectangleRec(bounds, fill);
+    DrawRectangleRec(bounds, Fade(fill, opacity));
     draw_texture_icon(open ? icons->playlist_back : icons->playlist_forward,
-                      bounds, RAYWHITE);
+                      bounds, Fade(RAYWHITE, opacity));
+}
+
+typedef struct {
+    bool version;
+    bool verbose;
+    bool verbose_raylib;
+    bool help;
+} Options;
+
+static void usage(FILE *stream, const char *program)
+{
+    fprintf(stream, "usage: %s [flags] [audio files ...]\n", program);
+    fprintf(stream, "flags:\n");
+    fprintf(stream, "  -v\n      print version\n");
+    fprintf(stream, "  -V\n      show application info logs\n");
+    fprintf(stream, "  -R\n      show raylib info logs\n");
+    fprintf(stream, "  -h\n      show help\n");
+}
+
+static bool parse_options(int argc, char **argv, Options *options,
+                          int *first_argument)
+{
+    int index = 1;
+
+    for (; index < argc; ++index) {
+        const char *argument = argv[index];
+
+        if (argument[0] != '-' || argument[1] == '\0') break;
+
+        for (const char *flag = argument + 1; *flag != '\0'; ++flag) {
+            switch (*flag) {
+            case 'v':
+                options->version = true;
+                break;
+            case 'V':
+                options->verbose = true;
+                break;
+            case 'R':
+                options->verbose_raylib = true;
+                break;
+            case 'h':
+                options->help = true;
+                break;
+            default:
+                fprintf(stderr, "ERROR: -%c: unknown option\n", *flag);
+                return false;
+            }
+        }
+    }
+
+    *first_argument = index;
+    return true;
 }
 
 int main(int argc, char **argv)
 {
+    const char *program = argv[0];
+    Options options = {0};
+    int first_argument;
+
+    if (!parse_options(argc, argv, &options, &first_argument)) {
+        usage(stderr, program);
+        return 1;
+    }
+
+    if (options.help) {
+        usage(stdout, program);
+        return 0;
+    }
+
+    if (options.version) {
+        printf("mp %s\n", MP_VERSION);
+        return 0;
+    }
+
+    mp_log_set_level(options.verbose ? INFO : WARNING);
+    SetTraceLogLevel(options.verbose_raylib ? LOG_INFO : LOG_WARNING);
+
+    argc -= first_argument;
+    argv += first_argument;
+
     Player player;
 
     if (!player_init(&player)) return 1;
@@ -932,12 +1105,9 @@ int main(int argc, char **argv)
     Playback_Order playback_order;
     playback_order_init(&playback_order);
 
-    const int w_width = 1000;
-    const int w_height = 700;
-
     const char *window_title = "mp";
     const char *playlist_file_path =
-        argc == 2 && m3u_is_path(argv[1]) ? argv[1] : "playlist.m3u";
+        argc == 1 && m3u_is_path(argv[0]) ? argv[0] : "playlist.m3u";
     Track_Metadata metadata = {0};
     Session_State session_state;
     session_state_defaults(&session_state);
@@ -952,11 +1122,11 @@ int main(int argc, char **argv)
                                       &session_state) == SESSION_LOAD_OK;
     }
 
-    bool restore_playback = session_loaded && argc == 1;
+    bool restore_playback = session_loaded && argc == 0;
 
-    if (argc > 1) {
-        if (!update_input_paths(&playlist, (const char *const *)&argv[1],
-                                (size_t)(argc - 1), true, NULL)) {
+    if (argc > 0) {
+        if (!update_input_paths(&playlist, (const char *const *)argv,
+                                (size_t)argc, true, NULL)) {
             playlist_clear(&playlist);
         }
 
@@ -1022,13 +1192,11 @@ int main(int argc, char **argv)
     const Color progress_hover = {255, 255, 255, 255};
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(w_width, w_height, window_title);
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_title);
 
     Ui_Icons icons = {0};
-    char asset_directory[ASSET_PATH_SIZE];
 
-    if (!resolve_asset_directory(asset_directory, sizeof(asset_directory))) {
-        mp_log(ERROR, "failed to locate application assets");
+    if (!set_window_icon()) {
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1036,8 +1204,24 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    SetWindowMinSize(480, 320);
-    SetTextureFilter(GetFontDefault().texture, TEXTURE_FILTER_POINT);
+    if (!load_fonts()) {
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
+
+    if (!create_ui_icons(&icons)) {
+        unload_fonts();
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
+
+    SetWindowMinSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
     SetTargetFPS(60);
 
     Album_Art album_art = {0};
@@ -1046,16 +1230,24 @@ int main(int argc, char **argv)
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
+    float playlist_panel_animation = 0.0f;
+    float playlist_toggle_animation = 0.0f;
     size_t playlist_text_track = PLAYLIST_TRACK_NONE;
     double playlist_text_started_at = GetTime();
     size_t current_title_text_track = PLAYLIST_TRACK_NONE;
     double current_title_text_started_at = GetTime();
+    double spectrum_resume_at = 0.0;
     bool finished_handled = false;
     bool seek_dragging = false;
     bool seek_resume_playback = false;
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
 
     while (!WindowShouldClose()) {
+        if (IsWindowResized()) {
+            spectrum_resume_at =
+                GetTime() + SPECTRUM_RESIZE_SETTLE_SECONDS;
+        }
+
         if (IsFileDropped()) {
             FilePathList dropped_files = LoadDroppedFiles();
 
@@ -1122,36 +1314,36 @@ int main(int argc, char **argv)
 
         Vector2 mouse = GetMousePosition();
         float mouse_wheel = GetMouseWheelMove();
-        Ui_Layout layout =
-            make_ui_layout(GetScreenWidth(), GetScreenHeight(), playlist_open);
-        bool playlist_toggle_visible =
+        float ui_frame_time = GetFrameTime();
+        playlist_panel_animation = animate_towards(
+            playlist_panel_animation, playlist_open && has_track ? 1.0f : 0.0f,
+            PLAYLIST_PANEL_ANIMATION_SPEED, ui_frame_time);
+        Ui_Layout layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
+                                          playlist_panel_animation);
+        bool playlist_panel_visible =
+            has_track && playlist_panel_animation > 0.001f;
+        bool playlist_toggle_target =
             has_track &&
             (playlist_open ||
              CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
+        playlist_toggle_animation = animate_towards(
+            playlist_toggle_animation, playlist_toggle_target ? 1.0f : 0.0f,
+            PLAYLIST_TOGGLE_ANIMATION_SPEED, ui_frame_time);
+        bool playlist_toggle_visible =
+            has_track && playlist_toggle_animation > 0.001f;
+        Rectangle playlist_toggle_bounds = layout.playlist_toggle;
+        playlist_toggle_bounds.x = snap_pixel(
+            playlist_toggle_bounds.x +
+            playlist_toggle_bounds.width * (1.0f - playlist_toggle_animation));
 
         bool playlist_toggled =
             playlist_toggle_visible &&
-            button_pressed(layout.playlist_toggle, mouse, true);
+            button_pressed(playlist_toggle_bounds, mouse, true);
 
         if (playlist_toggled) {
             playlist_open = !playlist_open;
 
             if (playlist_open) playlist_text_started_at = GetTime();
-
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
-                                    playlist_open);
-            playlist_toggle_visible =
-                playlist_open ||
-                CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal);
-        }
-
-        int button_icon_size = (int)(layout.play_button.width + 0.5f);
-        int toggle_icon_size = (int)(layout.playlist_toggle.width + 0.5f);
-
-        if (!update_ui_icons(&icons, asset_directory, button_icon_size,
-                             toggle_icon_size)) {
-            exit_code = 1;
-            break;
         }
 
         size_t track_count = playlist_get_count(&playlist);
@@ -1165,7 +1357,7 @@ int main(int argc, char **argv)
         }
 
         bool mouse_over_playlist =
-            has_track && playlist_open &&
+            playlist_panel_visible &&
             CheckCollisionPointRec(mouse, layout.playlist_panel);
         size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
 
@@ -1275,15 +1467,18 @@ int main(int argc, char **argv)
 
         if (!has_track) {
             playlist_open = false;
+            playlist_panel_animation = 0.0f;
+            playlist_toggle_animation = 0.0f;
+            playlist_panel_visible = false;
             playlist_toggle_visible = false;
             mouse_over_playlist = false;
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), false);
+            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), 0.0f);
         }
 
         bool sidebar_blocks_mouse =
             mouse_over_playlist ||
             (playlist_toggle_visible &&
-             CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
+             CheckCollisionPointRec(mouse, playlist_toggle_bounds));
         bool controls_enabled = has_track && !sidebar_blocks_mouse;
         bool repeat_pressed =
             button_pressed(layout.repeat_button, mouse, controls_enabled);
@@ -1365,7 +1560,7 @@ int main(int argc, char **argv)
         }
 
         float volume_padding = snap_pixel(4.0f * layout.scale);
-        int volume_slot_width = MeasureText("Volume 100%", layout.status_size);
+        int volume_slot_width = measure_text("Volume 100%", layout.status_size);
         Rectangle volume_bounds = snap_rectangle((Rectangle){
             layout.progress_bar.x + layout.progress_bar.width -
                 (float)volume_slot_width - volume_padding,
@@ -1390,12 +1585,33 @@ int main(int argc, char **argv)
         }
 
         int volume_x = (int)(layout.progress_bar.x + layout.progress_bar.width -
-                             MeasureText(volume_text, layout.status_size));
+                             measure_text(volume_text, layout.status_size));
         bool volume_hovered = has_track && !sidebar_blocks_mouse &&
                               CheckCollisionPointRec(mouse, volume_bounds);
 
         float cursor = player_get_cursor(&player);
         float length = player_get_length(&player);
+        bool shift_down =
+            IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        float keyboard_seek = 0.0f;
+
+        if (has_track && !seek_dragging && shift_down) {
+            if (IsKeyPressed(KEY_COMMA)) keyboard_seek -= SEEK_STEP_SECONDS;
+            if (IsKeyPressed(KEY_PERIOD)) keyboard_seek += SEEK_STEP_SECONDS;
+        }
+
+        if (keyboard_seek != 0.0f) {
+            cursor += keyboard_seek;
+
+            if (cursor < 0.0f) cursor = 0.0f;
+            if (length > 0.0f && cursor > length) cursor = length;
+
+            if (!player_seek(&player, cursor)) {
+                exit_code = 1;
+                break;
+            }
+        }
+
         bool progress_hovered =
             has_track && !sidebar_blocks_mouse &&
             CheckCollisionPointRec(mouse, layout.progress_hitbox);
@@ -1474,7 +1690,7 @@ int main(int argc, char **argv)
 
         int time_x = (int)(layout.progress_bar.x +
                            (layout.progress_bar.width -
-                            MeasureText(time_text, layout.status_size)) /
+                            measure_text(time_text, layout.status_size)) /
                                2.0f);
 
         char playlist_text[64];
@@ -1483,7 +1699,7 @@ int main(int argc, char **argv)
                  playlist_get_current(&playlist) + 1,
                  playlist_get_count(&playlist));
 
-        int playlist_x = status_x + MeasureText(status, layout.status_size) +
+        int playlist_x = status_x + measure_text(status, layout.status_size) +
                          (int)snap_pixel(18.0f * layout.scale);
 
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
@@ -1517,7 +1733,7 @@ int main(int argc, char **argv)
 
         float current_title_right = (float)layout.width - layout.title_x;
 
-        if (playlist_open) {
+        if (playlist_panel_visible) {
             current_title_right = layout.playlist_panel.x - layout.title_x;
         }
 
@@ -1545,16 +1761,21 @@ int main(int argc, char **argv)
         }
 
         size_t bar_count = spectrum_bar_count(layout.spectrum, layout.scale);
+        bool spectrum_paused = GetTime() < spectrum_resume_at;
 
         if (has_track && bar_count > 0) {
-            float samples[SPECTRUM_SAMPLE_COUNT];
-            unsigned int sample_rate = 0;
-            size_t copied = player_copy_analysis_samples(
-                &player, samples, SPECTRUM_SAMPLE_COUNT, &sample_rate);
+            if (spectrum_paused) {
+                spectrum_decay(&spectrum, GetFrameTime());
+            } else {
+                float samples[SPECTRUM_SAMPLE_COUNT];
+                unsigned int sample_rate = 0;
+                size_t copied = player_copy_analysis_samples(
+                    &player, samples, SPECTRUM_SAMPLE_COUNT, &sample_rate);
 
-            if (copied == SPECTRUM_SAMPLE_COUNT) {
-                spectrum_update(&spectrum, samples, sample_rate, bar_count,
-                                GetFrameTime());
+                if (copied == SPECTRUM_SAMPLE_COUNT) {
+                    spectrum_update(&spectrum, samples, sample_rate, bar_count,
+                                    GetFrameTime());
+                }
             }
         } else {
             spectrum_reset(&spectrum);
@@ -1565,13 +1786,13 @@ int main(int argc, char **argv)
 
         if (!has_track) {
             const char *drop_text = "Drag & Drop Files";
-            int drop_text_size = crisp_font_size(30.0f * layout.scale, 20, 50);
+            int drop_text_size = crisp_font_size(40.0f * layout.scale, 30, 60);
             int drop_text_x =
-                (layout.width - MeasureText(drop_text, drop_text_size)) / 2;
+                (layout.width - measure_text(drop_text, drop_text_size)) / 2;
             int drop_text_y = (layout.height - drop_text_size) / 2;
 
-            DrawText(drop_text, drop_text_x, drop_text_y, drop_text_size,
-                     RAYWHITE);
+            draw_text(drop_text, drop_text_x, drop_text_y, drop_text_size,
+                      RAYWHITE);
         } else {
             draw_album_art(&album_art, layout.album_art);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale);
@@ -1579,16 +1800,16 @@ int main(int argc, char **argv)
                                 layout.title_size, layout.scale, RAYWHITE,
                                 current_title_hovered,
                                 current_title_text_started_at);
-            DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
-                     layout.status_size, GRAY);
-            DrawText(status, status_x, (int)layout.metadata_y,
-                     layout.status_size, LIGHTGRAY);
-            DrawText(playlist_text, playlist_x, (int)layout.metadata_y,
-                     layout.status_size, DARKGRAY);
-            DrawText(time_text, time_x, (int)layout.metadata_y,
-                     layout.status_size, GRAY);
-            DrawText(volume_text, volume_x, (int)layout.metadata_y,
-                     layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
+            draw_text(details_text, (int)layout.title_x, (int)layout.details_y,
+                      layout.status_size, GRAY);
+            draw_text(status, status_x, (int)layout.metadata_y,
+                      layout.status_size, LIGHTGRAY);
+            draw_text(playlist_text, playlist_x, (int)layout.metadata_y,
+                      layout.status_size, DARKGRAY);
+            draw_text(time_text, time_x, (int)layout.metadata_y,
+                      layout.status_size, GRAY);
+            draw_text(volume_text, volume_x, (int)layout.metadata_y,
+                      layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
 
             DrawRectangleRec(layout.progress_bar, progress_background);
             DrawRectangleRec(progress_fill, progress_hovered
@@ -1615,15 +1836,15 @@ int main(int argc, char **argv)
                         true, shuffle_enabled);
         }
 
-        if (has_track && playlist_open) {
+        if (playlist_panel_visible) {
             draw_playlist_panel(&playlist, &layout, playlist_scroll,
                                 hovered_playlist_track,
                                 playlist_text_started_at);
         }
 
         if (playlist_toggle_visible) {
-            draw_playlist_toggle(layout.playlist_toggle, playlist_open, &icons,
-                                 mouse);
+            draw_playlist_toggle(playlist_toggle_bounds, playlist_open, &icons,
+                                 mouse, playlist_toggle_animation);
         }
 
         EndDrawing();
@@ -1646,6 +1867,7 @@ int main(int argc, char **argv)
 
     album_art_clear(&album_art);
     unload_ui_icons(&icons);
+    unload_fonts();
     CloseWindow();
 
     playlist_uninit(&playlist);
