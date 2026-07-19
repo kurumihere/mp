@@ -50,7 +50,7 @@ bool playlist_append(Playlist *playlist, const char *const *paths, size_t count)
 {
     if (count == 0) return true;
     if (count > SIZE_MAX - playlist->count) {
-        mp_log(ERROR, "Playlist is too large");
+        mp_log(ERROR, "playlist is too large");
         return false;
     }
 
@@ -58,7 +58,7 @@ bool playlist_append(Playlist *playlist, const char *const *paths, size_t count)
 
     if (new_count > SIZE_MAX / sizeof(*playlist->paths) ||
         new_count > SIZE_MAX / sizeof(*playlist->metadata)) {
-        mp_log(ERROR, "Playlist is too large");
+        mp_log(ERROR, "playlist is too large");
         return false;
     }
 
@@ -68,7 +68,7 @@ bool playlist_append(Playlist *playlist, const char *const *paths, size_t count)
     if (new_paths == NULL || new_metadata == NULL) {
         free(new_paths);
         free(new_metadata);
-        mp_log(ERROR, "Failed to grow playlist");
+        mp_log(ERROR, "failed to grow playlist");
         return false;
     }
 
@@ -97,7 +97,7 @@ bool playlist_append(Playlist *playlist, const char *const *paths, size_t count)
 
         free(new_paths);
         free(new_metadata);
-        mp_log(ERROR, "Failed to copy playlist path");
+        mp_log(ERROR, "failed to copy playlist path");
         return false;
     }
 

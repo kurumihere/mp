@@ -250,7 +250,7 @@ Session_Load_Result session_load(const char *path, Playlist *playlist,
     if (file == NULL) {
         if (errno == ENOENT) return SESSION_LOAD_NOT_FOUND;
 
-        mp_log(WARNING, "Failed to open saved session \"%s\": %s", path,
+        mp_log(WARNING, "failed to open saved session \"%s\": %s", path,
                strerror(errno));
         return SESSION_LOAD_ERROR;
     }
@@ -326,7 +326,7 @@ Session_Load_Result session_load(const char *path, Playlist *playlist,
     free_paths(paths, count);
 
     if (!valid) {
-        mp_log(WARNING, "Ignoring invalid saved session: %s", path);
+        mp_log(WARNING, "ignoring invalid saved session: %s", path);
         return SESSION_LOAD_ERROR;
     }
 
@@ -341,7 +341,7 @@ bool session_save(const char *path, const Playlist *playlist,
 
     if (!state_valid(state, count) || count > MAX_SESSION_TRACKS ||
         !make_parent_directories(path)) {
-        mp_log(ERROR, "Failed to prepare saved session: %s", path);
+        mp_log(ERROR, "failed to prepare saved session: %s", path);
         return false;
     }
 
@@ -359,7 +359,7 @@ bool session_save(const char *path, const Playlist *playlist,
     FILE *file = fopen(temporary, "wb");
 
     if (file == NULL) {
-        mp_log(ERROR, "Failed to create saved session \"%s\": %s", path,
+        mp_log(ERROR, "failed to create saved session \"%s\": %s", path,
                strerror(errno));
         free(temporary);
         return false;
@@ -397,7 +397,7 @@ bool session_save(const char *path, const Playlist *playlist,
 
     if (!success) {
         remove(temporary);
-        mp_log(ERROR, "Failed to save session: %s", path);
+        mp_log(ERROR, "failed to save session: %s", path);
     }
 
     free(temporary);

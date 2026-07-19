@@ -78,7 +78,7 @@ bool player_init(Player *player)
     ma_result result = ma_engine_init(&config, &player->engine);
 
     if (result != MA_SUCCESS) {
-        mp_log(ERROR, "Failed to initialize audio engine: %s",
+        mp_log(ERROR, "failed to initialize audio engine: %s",
                ma_result_description(result));
 
         return false;
@@ -104,7 +104,7 @@ bool player_load(Player *player, const char *path)
                                 NULL, NULL, &player->sounds[next_sound]);
 
     if (result != MA_SUCCESS) {
-        mp_log(ERROR, "Failed to load \"%s\": %s", path,
+        mp_log(ERROR, "failed to load \"%s\": %s", path,
                ma_result_description(result));
 
         return false;
@@ -117,7 +117,7 @@ bool player_load(Player *player, const char *path)
     result = ma_sound_start(&player->sounds[next_sound]);
 
     if (result != MA_SUCCESS) {
-        mp_log(ERROR, "Failed to start playback: %s",
+        mp_log(ERROR, "failed to start playback: %s",
                ma_result_description(result));
 
         ma_sound_uninit(&player->sounds[next_sound]);
@@ -132,7 +132,7 @@ bool player_load(Player *player, const char *path)
 
     player->active_sound = next_sound;
 
-    mp_log(INFO, "Playing \"%s\"", path);
+    mp_log(INFO, "playing \"%s\"", path);
     return true;
 }
 
@@ -204,7 +204,7 @@ bool player_toggle(Player *player)
             result = ma_sound_seek_to_pcm_frame(sound, 0);
 
             if (result != MA_SUCCESS) {
-                mp_log(ERROR, "Failed to restart sound: %s",
+                mp_log(ERROR, "failed to restart sound: %s",
                        ma_result_description(result));
 
                 return false;
@@ -215,7 +215,7 @@ bool player_toggle(Player *player)
     }
 
     if (result != MA_SUCCESS) {
-        mp_log(ERROR, "Failed to change playback state: %s",
+        mp_log(ERROR, "failed to change playback state: %s",
                ma_result_description(result));
 
         return false;
@@ -241,7 +241,7 @@ bool player_seek(Player *player, float position)
     ma_result result = ma_sound_seek_to_second(sound, position);
 
     if (result != MA_SUCCESS) {
-        mp_log(ERROR, "Failed to seek to %.2f seconds: %s", position,
+        mp_log(ERROR, "failed to seek to %.2f seconds: %s", position,
                ma_result_description(result));
 
         return false;

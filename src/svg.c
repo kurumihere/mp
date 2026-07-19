@@ -23,7 +23,7 @@ Texture2D svg_load_texture(const char *path, int size, float content_scale)
     NSVGimage *svg = nsvgParseFromFile(path, "px", 96.0f);
 
     if (svg == NULL || svg->width <= 0.0f || svg->height <= 0.0f) {
-        mp_log(ERROR, "Failed to parse SVG: %s", path);
+        mp_log(ERROR, "failed to parse SVG: %s", path);
         nsvgDelete(svg);
         return (Texture2D){0};
     }
@@ -43,7 +43,7 @@ Texture2D svg_load_texture(const char *path, int size, float content_scale)
     unsigned char *pixels = calloc(pixel_count, 4);
 
     if (rasterizer == NULL || pixels == NULL) {
-        mp_log(ERROR, "Failed to allocate SVG rasterizer: %s", path);
+        mp_log(ERROR, "failed to allocate SVG rasterizer: %s", path);
         free(pixels);
         nsvgDeleteRasterizer(rasterizer);
         nsvgDelete(svg);
@@ -72,7 +72,7 @@ Texture2D svg_load_texture(const char *path, int size, float content_scale)
     nsvgDelete(svg);
 
     if (!IsTextureValid(texture)) {
-        mp_log(ERROR, "Failed to create SVG texture: %s", path);
+        mp_log(ERROR, "failed to create SVG texture: %s", path);
         return (Texture2D){0};
     }
 

@@ -190,7 +190,7 @@ static bool run_app(const Build *build, int argc, char **argv)
 
 static int usage(const char *program)
 {
-    nob_log(INFO, "Usage: %s [run [audio files...] | wine [audio files...]]",
+    nob_log(INFO, "usage: %s [run [audio files...] | wine [audio files...]]",
             program);
     return 1;
 }
@@ -209,7 +209,7 @@ int main(int argc, char **argv)
 
 #if defined(_WIN32)
     if (wine) {
-        nob_log(ERROR, "Wine build is only available on non-Windows hosts");
+        nob_log(ERROR, "wine build is only available on non-Windows hosts");
         return 1;
     }
 #endif

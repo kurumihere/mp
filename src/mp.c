@@ -105,7 +105,7 @@ static bool reset_playback_order(Playback_Order *order,
         return true;
     }
 
-    mp_log(ERROR, "Failed to update playback order");
+    mp_log(ERROR, "failed to update playback order");
     return false;
 }
 
@@ -116,7 +116,7 @@ static bool select_track(Player *player, Playlist *playlist,
     if (!play_track(player, playlist, index, metadata)) return false;
 
     if (!playback_order_select(order, index, random_order_index, NULL)) {
-        mp_log(ERROR, "Failed to select track in playback order");
+        mp_log(ERROR, "failed to select track in playback order");
         return false;
     }
 
@@ -293,7 +293,7 @@ static Texture2D load_asset_texture(const char *directory, const char *name,
     char path[ASSET_PATH_SIZE];
 
     if (!make_asset_path(path, sizeof(path), directory, name)) {
-        mp_log(ERROR, "Asset path is too long: %s", name);
+        mp_log(ERROR, "asset path is too long: %s", name);
         return (Texture2D){0};
     }
 
@@ -411,7 +411,7 @@ static void album_art_update(Album_Art *album_art, const char *track_path)
     album_art->track_path = malloc(path_size);
 
     if (album_art->track_path == NULL) {
-        mp_log(WARNING, "Failed to remember album art path");
+        mp_log(WARNING, "failed to remember album art path");
         return;
     }
 
@@ -431,7 +431,7 @@ static void album_art_update(Album_Art *album_art, const char *track_path)
     metadata_cover_unload(&cover);
 
     if (!IsImageValid(image)) {
-        mp_log(WARNING, "Failed to decode album art for \"%s\"", track_path);
+        mp_log(WARNING, "failed to decode album art for \"%s\"", track_path);
         return;
     }
 
@@ -439,7 +439,7 @@ static void album_art_update(Album_Art *album_art, const char *track_path)
     UnloadImage(image);
 
     if (!IsTextureValid(texture)) {
-        mp_log(WARNING, "Failed to upload album art for \"%s\"", track_path);
+        mp_log(WARNING, "failed to upload album art for \"%s\"", track_path);
         return;
     }
 
@@ -1028,7 +1028,7 @@ int main(int argc, char **argv)
     char asset_directory[ASSET_PATH_SIZE];
 
     if (!resolve_asset_directory(asset_directory, sizeof(asset_directory))) {
-        mp_log(ERROR, "Failed to locate application assets");
+        mp_log(ERROR, "failed to locate application assets");
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1081,7 +1081,7 @@ int main(int argc, char **argv)
                         exit_code = 1;
                     }
 
-                    mp_log(INFO, "Added %zu tracks to playlist", added);
+                    mp_log(INFO, "added %zu tracks to playlist", added);
                 }
             }
 
@@ -1222,7 +1222,7 @@ int main(int argc, char **argv)
 
         if (has_track && control_down && IsKeyPressed(KEY_S) &&
             m3u_save(&playlist, playlist_file_path)) {
-            mp_log(INFO, "Saved playlist to \"%s\"", playlist_file_path);
+            mp_log(INFO, "saved playlist to \"%s\"", playlist_file_path);
         }
 
         if (has_track && control_down && IsKeyPressed(KEY_DELETE)) {
@@ -1234,7 +1234,7 @@ int main(int argc, char **argv)
             seek_dragging = false;
             seek_resume_playback = false;
             metadata = (Track_Metadata){0};
-            mp_log(INFO, "Playlist cleared");
+            mp_log(INFO, "playlist cleared");
         } else if (has_track && IsKeyPressed(KEY_DELETE) &&
                    playlist_get_count(&playlist) > 0) {
             size_t removed_index = playlist_get_current(&playlist);
@@ -1267,7 +1267,7 @@ int main(int argc, char **argv)
                 metadata = (Track_Metadata){0};
             }
 
-            mp_log(INFO, "Removed track from playlist");
+            mp_log(INFO, "removed track from playlist");
         }
 
         state = player_get_state(&player);
@@ -1294,15 +1294,15 @@ int main(int argc, char **argv)
             switch (repeat_mode) {
             case REPEAT_OFF:
                 repeat_mode = REPEAT_ALL;
-                mp_log(INFO, "Repeat mode: All");
+                mp_log(INFO, "repeat mode: all");
                 break;
             case REPEAT_ALL:
                 repeat_mode = REPEAT_ONE;
-                mp_log(INFO, "Repeat mode: One");
+                mp_log(INFO, "repeat mode: one");
                 break;
             case REPEAT_ONE:
                 repeat_mode = REPEAT_OFF;
-                mp_log(INFO, "Repeat mode: Off");
+                mp_log(INFO, "repeat mode: off");
                 break;
             }
         }
@@ -1313,13 +1313,13 @@ int main(int argc, char **argv)
             if (!playback_order_set_shuffled(
                     &playback_order, playlist_get_current(&playlist), enabled,
                     random_order_index, NULL)) {
-                mp_log(ERROR, "Failed to change shuffle mode");
+                mp_log(ERROR, "failed to change shuffle mode");
                 exit_code = 1;
                 break;
             }
 
             shuffle_enabled = enabled;
-            mp_log(INFO, "Shuffle: %s", shuffle_enabled ? "On" : "Off");
+            mp_log(INFO, "shuffle: %s", shuffle_enabled ? "on" : "off");
         }
 
         bool repeat_all = repeat_mode == REPEAT_ALL;

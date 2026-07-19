@@ -195,7 +195,7 @@ static bool load_paths(const char *path, Path_List *paths)
     FILE *file = fopen(path, "rb");
 
     if (file == NULL) {
-        mp_log(ERROR, "Failed to open playlist \"%s\": %s", path,
+        mp_log(ERROR, "failed to open playlist \"%s\": %s", path,
                strerror(errno));
         return false;
     }
@@ -204,7 +204,7 @@ static bool load_paths(const char *path, Path_List *paths)
 
     if (directory == NULL) {
         fclose(file);
-        mp_log(ERROR, "Failed to resolve playlist path: %s", path);
+        mp_log(ERROR, "failed to resolve playlist path: %s", path);
         return false;
     }
 
@@ -251,7 +251,7 @@ static bool load_paths(const char *path, Path_List *paths)
 
     if (!success) {
         path_list_uninit(paths);
-        mp_log(ERROR, "Failed to read playlist: %s", path);
+        mp_log(ERROR, "failed to read playlist: %s", path);
     }
 
     return success;
@@ -321,7 +321,7 @@ bool m3u_save(const Playlist *playlist, const char *path)
     FILE *file = fopen(temporary, "wb");
 
     if (file == NULL) {
-        mp_log(ERROR, "Failed to create playlist \"%s\": %s", path,
+        mp_log(ERROR, "failed to create playlist \"%s\": %s", path,
                strerror(errno));
         free(temporary);
         return false;
@@ -353,7 +353,7 @@ bool m3u_save(const Playlist *playlist, const char *path)
 
     if (!success) {
         remove(temporary);
-        mp_log(ERROR, "Failed to save playlist: %s", path);
+        mp_log(ERROR, "failed to save playlist: %s", path);
     }
 
     free(temporary);
