@@ -74,12 +74,13 @@ static bool generate_assets(void)
         inputs[i + 1] = asset_sources[i].path;
     }
 
+    if (!mkdir_if_not_exists("build/generated")) return false;
+
     int rebuild =
         needs_rebuild(GENERATED_ASSETS_SOURCE, inputs, ARRAY_LEN(inputs));
 
     if (rebuild < 0) return false;
     if (rebuild == 0) return true;
-    if (!mkdir_if_not_exists("build/generated")) return false;
 
     String_Builder output = {0};
     sb_append_cstr(&output, "#include \"assets.h\"\n\n");
