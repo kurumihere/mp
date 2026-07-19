@@ -10,6 +10,13 @@
 #define COLOR_RED "\x1b[31m"
 #define COLOR_RESET "\x1b[0m"
 
+static Log_Level minimum_level = WARNING;
+
+void mp_log_set_level(Log_Level level)
+{
+    minimum_level = level;
+}
+
 static const char *level_name(Log_Level level)
 {
     switch (level) {
@@ -40,6 +47,8 @@ static const char *level_color(Log_Level level)
 
 void mp_log(Log_Level level, const char *format, ...)
 {
+    if (level < minimum_level) return;
+
     FILE *stream = level == INFO ? stdout : stderr;
     int descriptor = level == INFO ? STDOUT_FILENO : STDERR_FILENO;
     bool use_color = isatty(descriptor);

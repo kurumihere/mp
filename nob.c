@@ -68,7 +68,6 @@ static int app_needs_rebuild(const Build *build)
     };
     File_Paths inputs = {0};
     da_append(&inputs, "nob.c");
-    da_append(&inputs, "thirdparty/flag.h");
     da_append(&inputs, "thirdparty/nob.h");
 
     for (size_t i = 0; i < ARRAY_LEN(roots); ++i) {

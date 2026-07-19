@@ -4,9 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FLAG_IMPLEMENTATION
-#include "flag.h"
-
 #include "log.h"
 #include "m3u.h"
 #include "metadata.h"
@@ -23,7 +20,7 @@
 #define MP_VERSION "0.1.1"
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define SESSION_PATH_SIZE 4096
-#define SPECTRUM_DISPLAY_MAX_BARS 32
+#define SPECTRUM_DISPLAY_MAX_BARS 64
 
 static Font default_font;
 
@@ -1019,22 +1016,84 @@ static void draw_playlist_toggle(Rectangle bounds, bool open,
                       bounds, RAYWHITE);
 }
 
+typedef struct {
+    bool version;
+    bool verbose;
+    bool verbose_raylib;
+    bool help;
+} Options;
+
+static void usage(FILE *stream, const char *program)
+{
+    fprintf(stream, "usage: %s [flags] [audio files ...]\n", program);
+    fprintf(stream, "flags:\n");
+    fprintf(stream, "  -v\n      print version\n");
+    fprintf(stream, "  -V\n      show application info logs\n");
+    fprintf(stream, "  -R\n      show raylib info logs\n");
+    fprintf(stream, "  -h\n      show help\n");
+}
+
+static bool parse_options(int argc, char **argv, Options *options,
+                          int *first_argument)
+{
+    int index = 1;
+
+    for (; index < argc; ++index) {
+        const char *argument = argv[index];
+
+        if (argument[0] != '-' || argument[1] == '\0') break;
+
+        for (const char *flag = argument + 1; *flag != '\0'; ++flag) {
+            switch (*flag) {
+            case 'v':
+                options->version = true;
+                break;
+            case 'V':
+                options->verbose = true;
+                break;
+            case 'R':
+                options->verbose_raylib = true;
+                break;
+            case 'h':
+                options->help = true;
+                break;
+            default:
+                fprintf(stderr, "ERROR: -%c: unknown option\n", *flag);
+                return false;
+            }
+        }
+    }
+
+    *first_argument = index;
+    return true;
+}
+
 int main(int argc, char **argv)
 {
-    bool *version = flag_bool("v", false, "print version");
+    const char *program = argv[0];
+    Options options = {0};
+    int first_argument;
 
-    if (!flag_parse(argc, argv)) {
-        flag_print_error(stderr);
+    if (!parse_options(argc, argv, &options, &first_argument)) {
+        usage(stderr, program);
         return 1;
     }
 
-    if (*version) {
+    if (options.help) {
+        usage(stdout, program);
+        return 0;
+    }
+
+    if (options.version) {
         printf("mp %s\n", MP_VERSION);
         return 0;
     }
 
-    argc = flag_rest_argc();
-    argv = flag_rest_argv();
+    mp_log_set_level(options.verbose ? INFO : WARNING);
+    SetTraceLogLevel(options.verbose_raylib ? LOG_INFO : LOG_WARNING);
+
+    argc -= first_argument;
+    argv += first_argument;
 
     Player player;
 
