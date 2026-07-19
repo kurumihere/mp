@@ -20,6 +20,7 @@
 #define FONT_MAX_SIZE 60
 #define FONT_SIZE_STEP 10
 #define FONT_COUNT ((FONT_MAX_SIZE - FONT_MIN_SIZE) / FONT_SIZE_STEP + 1)
+#define AUDIO_FILE_EXTENSIONS ".flac;.mp3;.wav"
 #define MP_VERSION "0.1.1"
 #define PLAYLIST_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
@@ -40,6 +41,28 @@ static Font fonts[FONT_COUNT];
 #if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
 #error Player analysis and spectrum sample counts must match
 #endif
+
+static int compare_paths(const void *left, const void *right)
+{
+    const char *left_path = *(const char *const *)left;
+    const char *right_path = *(const char *const *)right;
+    return strcmp(left_path, right_path);
+}
+
+static bool append_directory(Playlist *playlist, const char *path)
+{
+    FilePathList files =
+        LoadDirectoryFilesEx(path, AUDIO_FILE_EXTENSIONS, true);
+
+    if (files.count > 1) {
+        qsort(files.paths, files.count, sizeof(*files.paths), compare_paths);
+    }
+
+    bool success = playlist_append(playlist, (const char *const *)files.paths,
+                                   files.count);
+    UnloadDirectoryFiles(files);
+    return success;
+}
 
 static bool play_track(Player *player, Playlist *playlist, size_t index,
                        Track_Metadata *metadata)
@@ -67,7 +90,9 @@ static bool append_inputs_in_place(Playlist *playlist, const char *const *paths,
     for (size_t i = 0; i < count; ++i) {
         bool success;
 
-        if (m3u_is_path(paths[i])) {
+        if (DirectoryExists(paths[i])) {
+            success = append_directory(playlist, paths[i]);
+        } else if (m3u_is_path(paths[i])) {
             success = m3u_append(playlist, paths[i], NULL);
         } else {
             success = playlist_append(playlist, &paths[i], 1);
@@ -1025,7 +1050,9 @@ typedef struct {
 
 static void usage(FILE *stream, const char *program)
 {
-    fprintf(stream, "usage: %s [flags] [audio files ...]\n", program);
+    fprintf(stream,
+            "usage: %s [flags] [audio files, playlists, or folders ...]\n",
+            program);
     fprintf(stream, "flags:\n");
     fprintf(stream, "  -v\n      print version\n");
     fprintf(stream, "  -V\n      show application info logs\n");

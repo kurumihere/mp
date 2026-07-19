@@ -354,7 +354,9 @@ static bool run_app(const Build *build, int argc, char **argv)
 
 static int usage(const char *program)
 {
-    nob_log(INFO, "usage: %s [run [audio files...] | wine [audio files...]]",
+    nob_log(INFO,
+            "usage: %s [run [audio files, playlists, or folders ...] | "
+            "wine [audio files, playlists, or folders ...]]",
             program);
     return 1;
 }
