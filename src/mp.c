@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "assets.h"
+#include "config.h"
 #include "log.h"
 #include "m3u.h"
 #include "metadata.h"
@@ -22,8 +23,9 @@
 #define FONT_SIZE_STEP 10
 #define FONT_COUNT ((FONT_MAX_SIZE - FONT_MIN_SIZE) / FONT_SIZE_STEP + 1)
 #define AUDIO_FILE_EXTENSIONS ".flac;.mp3;.wav"
+#define CONFIG_PATH_SIZE 4096
 #define MP_VERSION "0.1.1"
-#define PLAYLIST_PANEL_ANIMATION_SPEED 14.0f
+#define SIDE_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
 #define SEEK_STEP_SECONDS 5.0f
@@ -226,6 +228,8 @@ typedef enum {
     BUTTON_REPEAT,
     BUTTON_REPEAT_ONE,
     BUTTON_SHUFFLE,
+    BUTTON_PLAYLIST,
+    BUTTON_SETTINGS,
 } Button_Icon;
 
 typedef enum {
@@ -233,6 +237,12 @@ typedef enum {
     REPEAT_ALL,
     REPEAT_ONE,
 } Repeat_Mode;
+
+typedef enum {
+    SIDE_PANEL_NONE,
+    SIDE_PANEL_PLAYLIST,
+    SIDE_PANEL_SETTINGS,
+} Side_Panel;
 
 typedef struct {
     Texture2D back;
@@ -242,6 +252,8 @@ typedef struct {
     Texture2D repeat;
     Texture2D repeat_one;
     Texture2D shuffle;
+    Texture2D playlist;
+    Texture2D settings;
     Texture2D playlist_back;
     Texture2D playlist_forward;
 } Ui_Icons;
@@ -426,11 +438,15 @@ typedef struct {
     Rectangle next_button;
     Rectangle repeat_button;
     Rectangle shuffle_button;
+    Rectangle playlist_button;
+    Rectangle settings_button;
     Rectangle progress_bar;
     Rectangle progress_hitbox;
     Rectangle album_art;
     Rectangle spectrum;
     Rectangle playlist_panel;
+    Rectangle settings_panel;
+    Rectangle settings_playlist_side;
     Rectangle playlist_toggle;
     Rectangle playlist_toggle_reveal;
 } Ui_Layout;
@@ -438,9 +454,10 @@ typedef struct {
 static void unload_ui_icons(Ui_Icons *icons)
 {
     Texture2D *textures[] = {
-        &icons->back,    &icons->forward,       &icons->pause,
-        &icons->play,    &icons->repeat,        &icons->repeat_one,
-        &icons->shuffle, &icons->playlist_back, &icons->playlist_forward,
+        &icons->back,     &icons->forward,       &icons->pause,
+        &icons->play,     &icons->repeat,        &icons->repeat_one,
+        &icons->shuffle,  &icons->playlist,      &icons->settings,
+        &icons->playlist_back, &icons->playlist_forward,
     };
 
     for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
@@ -594,6 +611,10 @@ static bool create_ui_icons(Ui_Icons *icons, System_Theme theme)
         dark ? ASSET_REPEAT_ONE_WHITE_SVG : ASSET_REPEAT_ONE_BLACK_SVG;
     Asset_Id shuffle =
         dark ? ASSET_SHUFFLE_WHITE_SVG : ASSET_SHUFFLE_BLACK_SVG;
+    Asset_Id playlist =
+        dark ? ASSET_PLAYLIST_LIGHT_SVG : ASSET_PLAYLIST_DARK_SVG;
+    Asset_Id settings =
+        dark ? ASSET_SETTINGS_WHITE_SVG : ASSET_SETTINGS_BLACK_SVG;
 
     *icons = (Ui_Icons){
         .back = load_asset_texture(back, UI_BUTTON_ICON_SIZE, 0.74f),
@@ -604,15 +625,18 @@ static bool create_ui_icons(Ui_Icons *icons, System_Theme theme)
         .repeat_one =
             load_asset_texture(repeat_one, UI_BUTTON_ICON_SIZE, 0.68f),
         .shuffle = load_asset_texture(shuffle, UI_BUTTON_ICON_SIZE, 0.68f),
+        .playlist = load_asset_texture(playlist, UI_BUTTON_ICON_SIZE, 0.72f),
+        .settings = load_asset_texture(settings, UI_BUTTON_ICON_SIZE, 0.68f),
         .playlist_back = load_asset_texture(back, UI_TOGGLE_ICON_SIZE, 0.88f),
         .playlist_forward =
             load_asset_texture(forward, UI_TOGGLE_ICON_SIZE, 0.88f),
     };
 
     Texture2D textures[] = {
-        icons->back,    icons->forward,       icons->pause,
-        icons->play,    icons->repeat,        icons->repeat_one,
-        icons->shuffle, icons->playlist_back, icons->playlist_forward,
+        icons->back,     icons->forward,       icons->pause,
+        icons->play,     icons->repeat,        icons->repeat_one,
+        icons->shuffle,  icons->playlist,      icons->settings,
+        icons->playlist_back, icons->playlist_forward,
     };
 
     for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
@@ -934,9 +958,11 @@ static int crisp_font_size(float desired, int minimum, int maximum)
 }
 
 static Ui_Layout make_ui_layout(int width, int height,
-                                float playlist_open_amount)
+                                float side_panel_open_amount,
+                                bool playlist_button_on_side)
 {
-    playlist_open_amount = clamp_float(playlist_open_amount, 0.0f, 1.0f);
+    side_panel_open_amount =
+        clamp_float(side_panel_open_amount, 0.0f, 1.0f);
 
     float horizontal_scale = (float)width / 1000.0f;
     float vertical_scale = (float)height / 700.0f;
@@ -956,11 +982,14 @@ static Ui_Layout make_ui_layout(int width, int height,
         snap_pixel(clamp_float(420.0f * scale, 240.0f, panel_max_height));
     float toggle_width = snap_pixel(clamp_float(32.0f * scale, 24.0f, 48.0f));
     float toggle_height = snap_pixel(clamp_float(72.0f * scale, 52.0f, 108.0f));
-    float shuffle_x = (float)width - padding - button_size;
-    float repeat_x = shuffle_x - gap - button_size;
+    float settings_x = (float)width - padding - button_size;
+    float playlist_x = settings_x - gap - button_size;
+    float repeat_right = playlist_button_on_side ? settings_x : playlist_x;
+    float repeat_x = repeat_right - gap - button_size;
     float next_x = repeat_x - gap - button_size;
     float play_x = next_x - gap - button_size;
     float previous_x = play_x - gap - button_size;
+    float shuffle_x = previous_x - gap - button_size;
     float panel_x = (float)width - panel_width;
     float panel_y = snap_pixel(((float)height - panel_height) / 2.0f);
     float title_y = snap_pixel(controls_y - 128.0f * scale);
@@ -998,9 +1027,10 @@ static Ui_Layout make_ui_layout(int width, int height,
     float open_toggle_x = open_panel_x - gap - toggle_width;
     float closed_toggle_x = (float)width - toggle_width;
     panel_x = (float)width +
-              (open_panel_x - (float)width) * playlist_open_amount;
+              (open_panel_x - (float)width) * side_panel_open_amount;
     float toggle_x = closed_toggle_x +
-                     (open_toggle_x - closed_toggle_x) * playlist_open_amount;
+                     (open_toggle_x - closed_toggle_x) *
+                         side_panel_open_amount;
 
     Ui_Layout layout = {
         .scale = scale,
@@ -1021,16 +1051,26 @@ static Ui_Layout make_ui_layout(int width, int height,
         .next_button = {next_x, controls_y, button_size, button_size},
         .repeat_button = {repeat_x, controls_y, button_size, button_size},
         .shuffle_button = {shuffle_x, controls_y, button_size, button_size},
+        .playlist_button = {playlist_x, controls_y, button_size, button_size},
+        .settings_button = {settings_x, controls_y, button_size, button_size},
         .progress_bar =
             {
                 padding,
                 controls_y + (button_size - progress_height) / 2.0f,
-                previous_x - gap - padding,
+                shuffle_x - gap - padding,
                 progress_height,
             },
         .album_art = album_art,
         .spectrum = spectrum,
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
+        .settings_panel = {panel_x, panel_y, panel_width, panel_height},
+        .settings_playlist_side =
+            {
+                panel_x + 16.0f * scale,
+                panel_y + 72.0f * scale,
+                panel_width - 32.0f * scale,
+                snap_pixel(clamp_float(64.0f * scale, 52.0f, 88.0f)),
+            },
         .playlist_toggle =
             {
                 toggle_x,
@@ -1076,10 +1116,15 @@ static Ui_Layout make_ui_layout(int width, int height,
     layout.next_button = snap_rectangle(layout.next_button);
     layout.repeat_button = snap_rectangle(layout.repeat_button);
     layout.shuffle_button = snap_rectangle(layout.shuffle_button);
+    layout.playlist_button = snap_rectangle(layout.playlist_button);
+    layout.settings_button = snap_rectangle(layout.settings_button);
     layout.progress_bar = snap_rectangle(layout.progress_bar);
     layout.album_art = snap_rectangle(layout.album_art);
     layout.spectrum = snap_rectangle(layout.spectrum);
     layout.playlist_panel = snap_rectangle(layout.playlist_panel);
+    layout.settings_panel = snap_rectangle(layout.settings_panel);
+    layout.settings_playlist_side =
+        snap_rectangle(layout.settings_playlist_side);
     layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
     layout.playlist_toggle_reveal =
         snap_rectangle(layout.playlist_toggle_reveal);
@@ -1147,6 +1192,10 @@ static Texture2D button_icon_texture(const Ui_Icons *icons, Button_Icon icon)
         return icons->repeat_one;
     case BUTTON_SHUFFLE:
         return icons->shuffle;
+    case BUTTON_PLAYLIST:
+        return icons->playlist;
+    case BUTTON_SETTINGS:
+        return icons->settings;
     }
 
     return (Texture2D){0};
@@ -1283,6 +1332,71 @@ static void draw_playlist_panel(const Playlist *playlist,
     }
 }
 
+static void draw_settings_panel(const Ui_Layout *layout,
+                                bool playlist_button_on_side, Vector2 mouse,
+                                const Ui_Theme *theme)
+{
+    Rectangle panel = layout->settings_panel;
+    Rectangle option = layout->settings_playlist_side;
+    bool hovered = CheckCollisionPointRec(mouse, option);
+    int label_size = crisp_font_size(22.0f * layout->scale, 20, 30);
+
+    DrawRectangleRec(panel, theme->surface);
+    DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
+             (int)(panel.y + panel.height), theme->surface_border);
+    draw_text("Settings", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+              (int)snap_pixel(panel.y + 20.0f * layout->scale),
+              crisp_font_size(35.0f * layout->scale, 30, 50),
+              theme->text_primary);
+
+    DrawRectangleRec(option,
+                     hovered ? theme->playlist_hover : theme->playlist_item);
+    float switch_width = snap_pixel(44.0f * layout->scale);
+    float switch_height = snap_pixel(24.0f * layout->scale);
+    Rectangle toggle = snap_rectangle((Rectangle){
+        option.x + option.width - switch_width - 14.0f * layout->scale,
+        option.y + (option.height - switch_height) / 2.0f,
+        switch_width,
+        switch_height,
+    });
+    int label_x = (int)snap_pixel(option.x + 14.0f * layout->scale);
+    float available_label_width = toggle.x - (float)label_x -
+                                  10.0f * layout->scale;
+
+    if ((float)measure_text("Playlist button on side", label_size) <=
+        available_label_width) {
+        int label_y = (int)snap_pixel(option.y +
+                                      (option.height - label_size) / 2.0f);
+        draw_text("Playlist button on side", label_x, label_y, label_size,
+                  theme->text_secondary);
+    } else {
+        int line_size = crisp_font_size(18.0f * layout->scale, 20, 20);
+        int first_y = (int)snap_pixel(option.y +
+                                      (option.height - line_size * 2) / 2.0f);
+        draw_text("Playlist button", label_x, first_y, line_size,
+                  theme->text_secondary);
+        draw_text("on side", label_x, first_y + line_size, line_size,
+                  theme->text_secondary);
+    }
+
+    Color toggle_fill = playlist_button_on_side ? theme->progress_foreground
+                                                 : theme->progress_background;
+    DrawRectangleRec(toggle, toggle_fill);
+
+    float knob_padding = snap_pixel(3.0f * layout->scale);
+    float knob_size = toggle.height - knob_padding * 2.0f;
+    float knob_x = playlist_button_on_side
+                       ? toggle.x + toggle.width - knob_padding - knob_size
+                       : toggle.x + knob_padding;
+    DrawRectangleRec(snap_rectangle((Rectangle){
+                         knob_x,
+                         toggle.y + knob_padding,
+                         knob_size,
+                         knob_size,
+                     }),
+                     theme->surface);
+}
+
 static void draw_playlist_toggle(Rectangle bounds, bool open,
                                  const Ui_Icon_Transition *icon_transition,
                                  Vector2 mouse, float opacity,
@@ -1388,6 +1502,18 @@ int main(int argc, char **argv)
 
     argc -= first_argument;
     argv += first_argument;
+
+    App_Config app_config;
+    app_config_defaults(&app_config);
+    char config_path[CONFIG_PATH_SIZE];
+    bool config_path_available =
+        app_config_default_path(config_path, sizeof(config_path));
+
+    if (config_path_available &&
+        app_config_load(config_path, &app_config) ==
+            APP_CONFIG_LOAD_NOT_FOUND) {
+        app_config_save(config_path, &app_config);
+    }
 
     Player player;
 
@@ -1533,9 +1659,11 @@ int main(int argc, char **argv)
     spectrum_init(&spectrum);
     int exit_code = 0;
     int playlist_scroll = 0;
-    bool playlist_open = false;
-    float playlist_panel_animation = 0.0f;
+    Side_Panel side_panel = SIDE_PANEL_NONE;
+    Side_Panel animated_side_panel = SIDE_PANEL_NONE;
+    float side_panel_animation = 0.0f;
     float playlist_toggle_animation = 0.0f;
+    bool playlist_button_on_side = app_config.playlist_button_on_side;
     size_t playlist_text_track = PLAYLIST_TRACK_NONE;
     double playlist_text_started_at = GetTime();
     size_t current_title_text_track = PLAYLIST_TRACK_NONE;
@@ -1633,20 +1761,31 @@ int main(int argc, char **argv)
         state = player_get_state(&player);
         bool has_track = state != PLAYER_STOPPED;
 
-        if (!has_track) playlist_open = false;
+        if (!has_track) side_panel = SIDE_PANEL_NONE;
 
         Vector2 mouse = GetMousePosition();
         float mouse_wheel = GetMouseWheelMove();
-        playlist_panel_animation = animate_towards(
-            playlist_panel_animation, playlist_open && has_track ? 1.0f : 0.0f,
-            PLAYLIST_PANEL_ANIMATION_SPEED, ui_frame_time);
+        side_panel_animation = animate_towards(
+            side_panel_animation,
+            side_panel != SIDE_PANEL_NONE && has_track ? 1.0f : 0.0f,
+            SIDE_PANEL_ANIMATION_SPEED, ui_frame_time);
+
+        if (side_panel == SIDE_PANEL_NONE && side_panel_animation <= 0.001f) {
+            animated_side_panel = SIDE_PANEL_NONE;
+        }
+
         Ui_Layout layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
-                                          playlist_panel_animation);
+                                          side_panel_animation,
+                                          playlist_button_on_side);
         bool playlist_panel_visible =
-            has_track && playlist_panel_animation > 0.001f;
+            has_track && animated_side_panel == SIDE_PANEL_PLAYLIST &&
+            side_panel_animation > 0.001f;
+        bool settings_panel_visible =
+            has_track && animated_side_panel == SIDE_PANEL_SETTINGS &&
+            side_panel_animation > 0.001f;
         bool playlist_toggle_target =
-            has_track &&
-            (playlist_open ||
+            has_track && playlist_button_on_side &&
+            (side_panel == SIDE_PANEL_PLAYLIST ||
              CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
         playlist_toggle_animation = animate_towards(
             playlist_toggle_animation, playlist_toggle_target ? 1.0f : 0.0f,
@@ -1663,9 +1802,16 @@ int main(int argc, char **argv)
             button_pressed(playlist_toggle_bounds, mouse, true);
 
         if (playlist_toggled) {
-            playlist_open = !playlist_open;
+            if (side_panel == SIDE_PANEL_PLAYLIST) {
+                side_panel = SIDE_PANEL_NONE;
+            } else {
+                side_panel = SIDE_PANEL_PLAYLIST;
+                animated_side_panel = SIDE_PANEL_PLAYLIST;
+            }
 
-            if (playlist_open) playlist_text_started_at = GetTime();
+            if (side_panel == SIDE_PANEL_PLAYLIST) {
+                playlist_text_started_at = GetTime();
+            }
         }
 
         size_t track_count = playlist_get_count(&playlist);
@@ -1681,6 +1827,23 @@ int main(int argc, char **argv)
         bool mouse_over_playlist =
             playlist_panel_visible &&
             CheckCollisionPointRec(mouse, layout.playlist_panel);
+        bool mouse_over_settings =
+            settings_panel_visible &&
+            CheckCollisionPointRec(mouse, layout.settings_panel);
+
+        if (settings_panel_visible &&
+            button_pressed(layout.settings_playlist_side, mouse, true)) {
+            playlist_button_on_side = !playlist_button_on_side;
+            app_config.playlist_button_on_side = playlist_button_on_side;
+
+            if (config_path_available) {
+                app_config_save(config_path, &app_config);
+            }
+
+            mp_log(INFO, "playlist button: %s",
+                   playlist_button_on_side ? "side" : "controls");
+        }
+
         size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
 
         if (mouse_over_playlist) {
@@ -1788,17 +1951,21 @@ int main(int argc, char **argv)
         has_track = state != PLAYER_STOPPED;
 
         if (!has_track) {
-            playlist_open = false;
-            playlist_panel_animation = 0.0f;
+            side_panel = SIDE_PANEL_NONE;
+            animated_side_panel = SIDE_PANEL_NONE;
+            side_panel_animation = 0.0f;
             playlist_toggle_animation = 0.0f;
             playlist_panel_visible = false;
+            settings_panel_visible = false;
             playlist_toggle_visible = false;
             mouse_over_playlist = false;
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), 0.0f);
+            mouse_over_settings = false;
+            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), 0.0f,
+                                    playlist_button_on_side);
         }
 
         bool sidebar_blocks_mouse =
-            mouse_over_playlist ||
+            mouse_over_playlist || mouse_over_settings ||
             (playlist_toggle_visible &&
              CheckCollisionPointRec(mouse, playlist_toggle_bounds));
         bool controls_enabled = has_track && !sidebar_blocks_mouse;
@@ -1806,6 +1973,30 @@ int main(int argc, char **argv)
             button_pressed(layout.repeat_button, mouse, controls_enabled);
         bool shuffle_pressed =
             button_pressed(layout.shuffle_button, mouse, controls_enabled);
+        bool playlist_pressed =
+            !playlist_button_on_side &&
+            button_pressed(layout.playlist_button, mouse, controls_enabled);
+        bool settings_pressed =
+            button_pressed(layout.settings_button, mouse, controls_enabled);
+
+        if (playlist_pressed) {
+            if (side_panel == SIDE_PANEL_PLAYLIST) {
+                side_panel = SIDE_PANEL_NONE;
+            } else {
+                side_panel = SIDE_PANEL_PLAYLIST;
+                animated_side_panel = SIDE_PANEL_PLAYLIST;
+                playlist_text_started_at = GetTime();
+            }
+        }
+
+        if (settings_pressed) {
+            if (side_panel == SIDE_PANEL_SETTINGS) {
+                side_panel = SIDE_PANEL_NONE;
+            } else {
+                side_panel = SIDE_PANEL_SETTINGS;
+                animated_side_panel = SIDE_PANEL_SETTINGS;
+            }
+        }
 
         if (repeat_pressed) {
             switch (repeat_mode) {
@@ -2055,7 +2246,7 @@ int main(int argc, char **argv)
 
         float current_title_right = (float)layout.width - layout.title_x;
 
-        if (playlist_panel_visible) {
+        if (playlist_panel_visible || settings_panel_visible) {
             current_title_right = layout.playlist_panel.x - layout.title_x;
         }
 
@@ -2140,13 +2331,21 @@ int main(int argc, char **argv)
             DrawRectangleRec(progress_fill, progress_hovered
                                                 ? theme->progress_hover
                                                 : theme->progress_foreground);
-            float radius_scale = progress_hovered ? 7.0f : 5.0f;
-            float handle_radius = snap_pixel(radius_scale * layout.scale);
+            float handle_scale = progress_hovered ? 14.0f : 10.0f;
+            float handle_size = snap_pixel(handle_scale * layout.scale);
             Color handle_color =
                 progress_hovered ? theme->progress_hover
                                  : theme->progress_foreground;
-            DrawCircleV(progress_handle, handle_radius, handle_color);
+            DrawRectangleRec(snap_rectangle((Rectangle){
+                                 progress_handle.x - handle_size / 2.0f,
+                                 progress_handle.y - handle_size / 2.0f,
+                                 handle_size,
+                                 handle_size,
+                             }),
+                             handle_color);
 
+            draw_button(layout.shuffle_button, BUTTON_SHUFFLE,
+                        &icon_transition, mouse, true, shuffle_enabled, theme);
             draw_button(layout.previous_button, BUTTON_PREVIOUS,
                         &icon_transition, mouse, can_previous, false, theme);
             draw_button(layout.play_button,
@@ -2159,8 +2358,14 @@ int main(int argc, char **argv)
                                                   : BUTTON_REPEAT,
                         &icon_transition, mouse, true,
                         repeat_mode != REPEAT_OFF, theme);
-            draw_button(layout.shuffle_button, BUTTON_SHUFFLE,
-                        &icon_transition, mouse, true, shuffle_enabled, theme);
+            if (!playlist_button_on_side) {
+                draw_button(layout.playlist_button, BUTTON_PLAYLIST,
+                            &icon_transition, mouse, true,
+                            side_panel == SIDE_PANEL_PLAYLIST, theme);
+            }
+            draw_button(layout.settings_button, BUTTON_SETTINGS,
+                        &icon_transition, mouse, true,
+                        side_panel == SIDE_PANEL_SETTINGS, theme);
         }
 
         if (playlist_panel_visible) {
@@ -2169,8 +2374,14 @@ int main(int argc, char **argv)
                                 playlist_text_started_at, theme);
         }
 
+        if (settings_panel_visible) {
+            draw_settings_panel(&layout, playlist_button_on_side, mouse,
+                                theme);
+        }
+
         if (playlist_toggle_visible) {
-            draw_playlist_toggle(playlist_toggle_bounds, playlist_open,
+            draw_playlist_toggle(playlist_toggle_bounds,
+                                 side_panel == SIDE_PANEL_PLAYLIST,
                                  &icon_transition, mouse,
                                  playlist_toggle_animation, theme);
         }
