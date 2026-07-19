@@ -232,9 +232,9 @@ bool session_default_path(char *path, size_t capacity)
     int written;
 
     if (state_home != NULL && state_home[0] != '\0') {
-        written = snprintf(path, capacity, "%s/mp/state", state_home);
+        written = snprintf(path, capacity, "%s/mpstaterc", state_home);
     } else if (home != NULL && home[0] != '\0') {
-        written = snprintf(path, capacity, "%s/.local/state/mp/state", home);
+        written = snprintf(path, capacity, "%s/.local/state/mpstaterc", home);
     } else {
         return false;
     }
