@@ -16,9 +16,12 @@
 #include "svg.h"
 
 #define ASSET_PATH_SIZE 4096
+#define DEFAULT_FONT_BASE_SIZE 96
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 32
+
+static Font default_font;
 
 #if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
 #error Player analysis and spectrum sample counts must match
@@ -252,6 +255,61 @@ static bool make_asset_path(char *path, size_t capacity, const char *directory,
     int written = snprintf(path, capacity, "%s/%s", directory, name);
 
     return written >= 0 && (size_t)written < capacity;
+}
+
+static bool load_default_font(const char *asset_directory)
+{
+    char path[ASSET_PATH_SIZE];
+
+    if (!make_asset_path(path, sizeof(path), asset_directory,
+                         "OpenSans-Regular.ttf")) {
+        mp_log(ERROR, "font path is too long");
+        return false;
+    }
+
+    int codepoints[1024];
+    int codepoint_count = 0;
+    const int ranges[][2] = {
+        {0x0020, 0x007e},
+        {0x00a0, 0x017f},
+        {0x0400, 0x052f},
+        {0x2000, 0x206f},
+    };
+
+    for (size_t range = 0; range < sizeof(ranges) / sizeof(ranges[0]);
+         ++range) {
+        for (int codepoint = ranges[range][0]; codepoint <= ranges[range][1];
+             ++codepoint) {
+            codepoints[codepoint_count++] = codepoint;
+        }
+    }
+
+    Font font =
+        LoadFontEx(path, DEFAULT_FONT_BASE_SIZE, codepoints, codepoint_count);
+
+    if (!IsFontValid(font) || !IsTextureValid(font.texture) ||
+        font.baseSize != DEFAULT_FONT_BASE_SIZE) {
+        mp_log(ERROR, "failed to load font: %s", path);
+        return false;
+    }
+
+    GenTextureMipmaps(&font.texture);
+    SetTextureFilter(font.texture, TEXTURE_FILTER_TRILINEAR);
+    default_font = font;
+    return true;
+}
+
+static int measure_text(const char *text, int font_size)
+{
+    return (int)roundf(
+        MeasureTextEx(default_font, text, (float)font_size, 0.0f).x);
+}
+
+static void draw_text(const char *text, int x, int y, int font_size,
+                      Color color)
+{
+    DrawTextEx(default_font, text, (Vector2){(float)x, (float)y},
+               (float)font_size, 0.0f, color);
 }
 
 static bool asset_directory_valid(const char *directory)
@@ -537,10 +595,10 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
                                 int font_size, float scale, Color color,
                                 bool scrolling, double started_at)
 {
-    int text_width = MeasureText(text, font_size);
+    int text_width = measure_text(text, font_size);
 
     if ((float)text_width <= bounds.width) {
-        DrawText(text, (int)bounds.x, (int)bounds.y, font_size, color);
+        draw_text(text, (int)bounds.x, (int)bounds.y, font_size, color);
         return;
     }
 
@@ -569,8 +627,8 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
 
     BeginScissorMode((int)bounds.x, (int)bounds.y, (int)bounds.width,
                      (int)bounds.height);
-    DrawText(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
-             font_size, color);
+    draw_text(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
+              font_size, color);
     EndScissorMode();
 }
 
@@ -646,14 +704,15 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .scale = scale,
         .width = width,
         .height = height,
-        .title_size = crisp_font_size(32.0f * scale, 20, 50),
-        .status_size = crisp_font_size(18.0f * scale, 10, 30),
+        .title_size = crisp_font_size(38.0f * scale, 30, 60),
+        .status_size = crisp_font_size(25.0f * scale, 20, 40),
         .title_x = padding,
         .title_y = title_y,
         .details_y = snap_pixel(controls_y - 82.0f * scale),
         .metadata_y = snap_pixel(controls_y - 37.0f * scale),
         .playlist_top = snap_pixel(panel_y + 64.0f * scale),
-        .playlist_item_height = snap_pixel(62.0f * scale),
+        .playlist_item_height =
+            snap_pixel(clamp_float(82.0f * scale, 60.0f, 120.0f)),
         .playlist_item_gap = snap_pixel(4.0f * scale),
         .previous_button = {previous_x, controls_y, button_size, button_size},
         .play_button = {play_x, controls_y, button_size, button_size},
@@ -816,22 +875,22 @@ static void draw_playlist_panel(const Playlist *playlist,
                                 size_t hovered_track, double text_started_at)
 {
     Rectangle panel = layout->playlist_panel;
-    int title_size = crisp_font_size(25.0f * layout->scale, 20, 40);
-    int details_size = crisp_font_size(16.0f * layout->scale, 10, 30);
+    int title_size = crisp_font_size(35.0f * layout->scale, 30, 50);
+    int details_size = crisp_font_size(25.0f * layout->scale, 20, 40);
     size_t count = playlist_get_count(playlist);
     size_t current = playlist_get_current(playlist);
 
     DrawRectangleRec(panel, (Color){24, 24, 24, 255});
     DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
              (int)(panel.y + panel.height), (Color){55, 55, 55, 255});
-    DrawText("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
-             (int)snap_pixel(panel.y + 20.0f * layout->scale),
-             crisp_font_size(26.0f * layout->scale, 20, 40), RAYWHITE);
+    draw_text("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+              (int)snap_pixel(panel.y + 20.0f * layout->scale),
+              crisp_font_size(35.0f * layout->scale, 30, 50), RAYWHITE);
 
     if (count == 0) {
-        DrawText("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
-                 (int)snap_pixel(panel.y + 70.0f * layout->scale),
-                 crisp_font_size(20.0f * layout->scale, 10, 30), GRAY);
+        draw_text("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+                  (int)snap_pixel(panel.y + 70.0f * layout->scale),
+                  crisp_font_size(25.0f * layout->scale, 20, 40), GRAY);
         return;
     }
 
@@ -877,7 +936,7 @@ static void draw_playlist_panel(const Playlist *playlist,
         } else {
             Rectangle title_bounds = {
                 text_x,
-                snap_pixel(item.y + 5.0f * layout->scale),
+                snap_pixel(item.y + 4.0f * layout->scale),
                 text_width,
                 (float)title_size,
             };
@@ -895,7 +954,7 @@ static void draw_playlist_panel(const Playlist *playlist,
 
             Rectangle details_bounds = {
                 text_x,
-                snap_pixel(item.y + 39.0f * layout->scale),
+                snap_pixel(item.y + title_size + 8.0f * layout->scale),
                 text_width,
                 (float)details_size,
             };
@@ -1036,8 +1095,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (!load_default_font(asset_directory)) {
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
+
     SetWindowMinSize(480, 320);
-    SetTextureFilter(GetFontDefault().texture, TEXTURE_FILTER_POINT);
     SetTargetFPS(60);
 
     Album_Art album_art = {0};
@@ -1365,7 +1431,7 @@ int main(int argc, char **argv)
         }
 
         float volume_padding = snap_pixel(4.0f * layout.scale);
-        int volume_slot_width = MeasureText("Volume 100%", layout.status_size);
+        int volume_slot_width = measure_text("Volume 100%", layout.status_size);
         Rectangle volume_bounds = snap_rectangle((Rectangle){
             layout.progress_bar.x + layout.progress_bar.width -
                 (float)volume_slot_width - volume_padding,
@@ -1390,7 +1456,7 @@ int main(int argc, char **argv)
         }
 
         int volume_x = (int)(layout.progress_bar.x + layout.progress_bar.width -
-                             MeasureText(volume_text, layout.status_size));
+                             measure_text(volume_text, layout.status_size));
         bool volume_hovered = has_track && !sidebar_blocks_mouse &&
                               CheckCollisionPointRec(mouse, volume_bounds);
 
@@ -1474,7 +1540,7 @@ int main(int argc, char **argv)
 
         int time_x = (int)(layout.progress_bar.x +
                            (layout.progress_bar.width -
-                            MeasureText(time_text, layout.status_size)) /
+                            measure_text(time_text, layout.status_size)) /
                                2.0f);
 
         char playlist_text[64];
@@ -1483,7 +1549,7 @@ int main(int argc, char **argv)
                  playlist_get_current(&playlist) + 1,
                  playlist_get_count(&playlist));
 
-        int playlist_x = status_x + MeasureText(status, layout.status_size) +
+        int playlist_x = status_x + measure_text(status, layout.status_size) +
                          (int)snap_pixel(18.0f * layout.scale);
 
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
@@ -1565,13 +1631,13 @@ int main(int argc, char **argv)
 
         if (!has_track) {
             const char *drop_text = "Drag & Drop Files";
-            int drop_text_size = crisp_font_size(30.0f * layout.scale, 20, 50);
+            int drop_text_size = crisp_font_size(40.0f * layout.scale, 30, 60);
             int drop_text_x =
-                (layout.width - MeasureText(drop_text, drop_text_size)) / 2;
+                (layout.width - measure_text(drop_text, drop_text_size)) / 2;
             int drop_text_y = (layout.height - drop_text_size) / 2;
 
-            DrawText(drop_text, drop_text_x, drop_text_y, drop_text_size,
-                     RAYWHITE);
+            draw_text(drop_text, drop_text_x, drop_text_y, drop_text_size,
+                      RAYWHITE);
         } else {
             draw_album_art(&album_art, layout.album_art);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale);
@@ -1579,16 +1645,16 @@ int main(int argc, char **argv)
                                 layout.title_size, layout.scale, RAYWHITE,
                                 current_title_hovered,
                                 current_title_text_started_at);
-            DrawText(details_text, (int)layout.title_x, (int)layout.details_y,
-                     layout.status_size, GRAY);
-            DrawText(status, status_x, (int)layout.metadata_y,
-                     layout.status_size, LIGHTGRAY);
-            DrawText(playlist_text, playlist_x, (int)layout.metadata_y,
-                     layout.status_size, DARKGRAY);
-            DrawText(time_text, time_x, (int)layout.metadata_y,
-                     layout.status_size, GRAY);
-            DrawText(volume_text, volume_x, (int)layout.metadata_y,
-                     layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
+            draw_text(details_text, (int)layout.title_x, (int)layout.details_y,
+                      layout.status_size, GRAY);
+            draw_text(status, status_x, (int)layout.metadata_y,
+                      layout.status_size, LIGHTGRAY);
+            draw_text(playlist_text, playlist_x, (int)layout.metadata_y,
+                      layout.status_size, DARKGRAY);
+            draw_text(time_text, time_x, (int)layout.metadata_y,
+                      layout.status_size, GRAY);
+            draw_text(volume_text, volume_x, (int)layout.metadata_y,
+                      layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
 
             DrawRectangleRec(layout.progress_bar, progress_background);
             DrawRectangleRec(progress_fill, progress_hovered
@@ -1646,6 +1712,7 @@ int main(int argc, char **argv)
 
     album_art_clear(&album_art);
     unload_ui_icons(&icons);
+    UnloadFont(default_font);
     CloseWindow();
 
     playlist_uninit(&playlist);
