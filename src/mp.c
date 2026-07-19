@@ -15,6 +15,7 @@
 #include "session.h"
 #include "spectrum.h"
 #include "svg.h"
+#include "theme.h"
 
 #define FONT_MIN_SIZE 20
 #define FONT_MAX_SIZE 60
@@ -29,6 +30,7 @@
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
 #define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
+#define THEME_TRANSITION_SECONDS 0.5f
 #define UI_BUTTON_ICON_SIZE 72
 #define UI_TOGGLE_ICON_SIZE 48
 #define WINDOW_HEIGHT 700
@@ -245,6 +247,162 @@ typedef struct {
 } Ui_Icons;
 
 typedef struct {
+    Ui_Icons current;
+    Ui_Icons next;
+    System_Theme current_theme;
+    System_Theme target_theme;
+    float progress;
+    bool active;
+} Ui_Icon_Transition;
+
+typedef struct {
+    Color background;
+    Color surface;
+    Color surface_border;
+    Color spectrum;
+    Color button;
+    Color button_disabled;
+    Color button_active;
+    Color button_hover;
+    Color text_primary;
+    Color text_secondary;
+    Color text_muted;
+    Color text_faint;
+    Color playlist_current;
+    Color playlist_item;
+    Color playlist_hover;
+    Color progress_background;
+    Color progress_foreground;
+    Color progress_hover;
+} Ui_Theme;
+
+static const Ui_Theme ui_themes[] = {
+    [SYSTEM_THEME_LIGHT] =
+        {
+            .background = {250, 250, 250, 255},
+            .surface = {240, 240, 240, 255},
+            .surface_border = {205, 205, 205, 255},
+            .spectrum = {50, 50, 50, 255},
+            .button = {232, 232, 232, 255},
+            .button_disabled = {245, 245, 245, 255},
+            .button_active = {210, 210, 210, 255},
+            .button_hover = {200, 200, 200, 255},
+            .text_primary = {24, 24, 24, 255},
+            .text_secondary = {65, 65, 65, 255},
+            .text_muted = {105, 105, 105, 255},
+            .text_faint = {155, 155, 155, 255},
+            .playlist_current = {218, 218, 218, 255},
+            .playlist_item = {244, 244, 244, 255},
+            .playlist_hover = {230, 230, 230, 255},
+            .progress_background = {205, 205, 205, 255},
+            .progress_foreground = {45, 45, 45, 255},
+            .progress_hover = {0, 0, 0, 255},
+        },
+    [SYSTEM_THEME_DARK] =
+        {
+            .background = {18, 18, 18, 255},
+            .surface = {24, 24, 24, 255},
+            .surface_border = {55, 55, 55, 255},
+            .spectrum = {210, 210, 210, 255},
+            .button = {36, 36, 36, 255},
+            .button_disabled = {24, 24, 24, 255},
+            .button_active = {52, 52, 52, 255},
+            .button_hover = {68, 68, 68, 255},
+            .text_primary = {245, 245, 245, 255},
+            .text_secondary = {200, 200, 200, 255},
+            .text_muted = {130, 130, 130, 255},
+            .text_faint = {80, 80, 80, 255},
+            .playlist_current = {58, 58, 58, 255},
+            .playlist_item = {31, 31, 31, 255},
+            .playlist_hover = {44, 44, 44, 255},
+            .progress_background = {55, 55, 55, 255},
+            .progress_foreground = {230, 230, 230, 255},
+            .progress_hover = {255, 255, 255, 255},
+        },
+};
+
+static const Ui_Theme *ui_theme_for(System_Theme theme)
+{
+    return &ui_themes[theme == SYSTEM_THEME_DARK ? SYSTEM_THEME_DARK
+                                                  : SYSTEM_THEME_LIGHT];
+}
+
+typedef struct {
+    Ui_Theme current;
+    Ui_Theme start;
+    Ui_Theme target;
+    float progress;
+    bool active;
+} Ui_Theme_Transition;
+
+static Color blend_color(Color start, Color target, float amount)
+{
+    return (Color){
+        (unsigned char)(start.r + (target.r - start.r) * amount + 0.5f),
+        (unsigned char)(start.g + (target.g - start.g) * amount + 0.5f),
+        (unsigned char)(start.b + (target.b - start.b) * amount + 0.5f),
+        (unsigned char)(start.a + (target.a - start.a) * amount + 0.5f),
+    };
+}
+
+static Ui_Theme blend_theme(const Ui_Theme *start, const Ui_Theme *target,
+                            float amount)
+{
+#define BLEND_THEME_COLOR(field)                                             \
+    .field = blend_color(start->field, target->field, amount)
+    return (Ui_Theme){
+        BLEND_THEME_COLOR(background),
+        BLEND_THEME_COLOR(surface),
+        BLEND_THEME_COLOR(surface_border),
+        BLEND_THEME_COLOR(spectrum),
+        BLEND_THEME_COLOR(button),
+        BLEND_THEME_COLOR(button_disabled),
+        BLEND_THEME_COLOR(button_active),
+        BLEND_THEME_COLOR(button_hover),
+        BLEND_THEME_COLOR(text_primary),
+        BLEND_THEME_COLOR(text_secondary),
+        BLEND_THEME_COLOR(text_muted),
+        BLEND_THEME_COLOR(text_faint),
+        BLEND_THEME_COLOR(playlist_current),
+        BLEND_THEME_COLOR(playlist_item),
+        BLEND_THEME_COLOR(playlist_hover),
+        BLEND_THEME_COLOR(progress_background),
+        BLEND_THEME_COLOR(progress_foreground),
+        BLEND_THEME_COLOR(progress_hover),
+    };
+#undef BLEND_THEME_COLOR
+}
+
+static void begin_theme_transition(Ui_Theme_Transition *transition,
+                                   System_Theme target)
+{
+    transition->start = transition->current;
+    transition->target = *ui_theme_for(target);
+    transition->progress = 0.0f;
+    transition->active = true;
+}
+
+static void update_theme_transition(Ui_Theme_Transition *transition,
+                                    float delta_time)
+{
+    if (!transition->active) return;
+
+    transition->progress += delta_time / THEME_TRANSITION_SECONDS;
+
+    if (transition->progress >= 1.0f) {
+        transition->current = transition->target;
+        transition->progress = 1.0f;
+        transition->active = false;
+        return;
+    }
+
+    float amount = transition->progress * transition->progress *
+                   (3.0f - 2.0f * transition->progress);
+    transition->current =
+        blend_theme(&transition->start, &transition->target, amount);
+}
+
+typedef struct {
     Texture2D texture;
     char *track_path;
 } Album_Art;
@@ -423,25 +581,32 @@ static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
                             content_scale);
 }
 
-static bool create_ui_icons(Ui_Icons *icons)
+static bool create_ui_icons(Ui_Icons *icons, System_Theme theme)
 {
+    bool dark = theme == SYSTEM_THEME_DARK;
+    Asset_Id back = dark ? ASSET_BACK_WHITE_SVG : ASSET_BACK_BLACK_SVG;
+    Asset_Id forward =
+        dark ? ASSET_FORWARD_WHITE_SVG : ASSET_FORWARD_BLACK_SVG;
+    Asset_Id pause = dark ? ASSET_PAUSE_WHITE_SVG : ASSET_PAUSE_BLACK_SVG;
+    Asset_Id play = dark ? ASSET_PLAY_WHITE_SVG : ASSET_PLAY_BLACK_SVG;
+    Asset_Id repeat = dark ? ASSET_REPEAT_WHITE_SVG : ASSET_REPEAT_BLACK_SVG;
+    Asset_Id repeat_one =
+        dark ? ASSET_REPEAT_ONE_WHITE_SVG : ASSET_REPEAT_ONE_BLACK_SVG;
+    Asset_Id shuffle =
+        dark ? ASSET_SHUFFLE_WHITE_SVG : ASSET_SHUFFLE_BLACK_SVG;
+
     *icons = (Ui_Icons){
-        .back = load_asset_texture(ASSET_BACK_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
-        .forward =
-            load_asset_texture(ASSET_FORWARD_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
-        .pause =
-            load_asset_texture(ASSET_PAUSE_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
-        .play = load_asset_texture(ASSET_PLAY_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
-        .repeat =
-            load_asset_texture(ASSET_REPEAT_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
-        .repeat_one = load_asset_texture(ASSET_REPEAT_ONE_SVG,
-                                         UI_BUTTON_ICON_SIZE, 0.68f),
-        .shuffle =
-            load_asset_texture(ASSET_SHUFFLE_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist_back =
-            load_asset_texture(ASSET_BACK_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
+        .back = load_asset_texture(back, UI_BUTTON_ICON_SIZE, 0.74f),
+        .forward = load_asset_texture(forward, UI_BUTTON_ICON_SIZE, 0.74f),
+        .pause = load_asset_texture(pause, UI_BUTTON_ICON_SIZE, 0.72f),
+        .play = load_asset_texture(play, UI_BUTTON_ICON_SIZE, 0.72f),
+        .repeat = load_asset_texture(repeat, UI_BUTTON_ICON_SIZE, 0.68f),
+        .repeat_one =
+            load_asset_texture(repeat_one, UI_BUTTON_ICON_SIZE, 0.68f),
+        .shuffle = load_asset_texture(shuffle, UI_BUTTON_ICON_SIZE, 0.68f),
+        .playlist_back = load_asset_texture(back, UI_TOGGLE_ICON_SIZE, 0.88f),
         .playlist_forward =
-            load_asset_texture(ASSET_FORWARD_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
+            load_asset_texture(forward, UI_TOGGLE_ICON_SIZE, 0.88f),
     };
 
     Texture2D textures[] = {
@@ -458,6 +623,80 @@ static bool create_ui_icons(Ui_Icons *icons)
     }
 
     return true;
+}
+
+static bool init_ui_icon_transition(Ui_Icon_Transition *transition,
+                                    System_Theme theme)
+{
+    *transition = (Ui_Icon_Transition){
+        .current_theme = theme,
+        .target_theme = theme,
+    };
+    return create_ui_icons(&transition->current, theme);
+}
+
+static bool begin_ui_icon_transition(Ui_Icon_Transition *transition,
+                                     System_Theme target)
+{
+    if (transition->active) {
+        if (target == transition->target_theme) return true;
+
+        if (target == transition->current_theme) {
+            Ui_Icons icons = transition->current;
+            transition->current = transition->next;
+            transition->next = icons;
+
+            System_Theme theme = transition->current_theme;
+            transition->current_theme = transition->target_theme;
+            transition->target_theme = theme;
+            transition->progress = 1.0f - transition->progress;
+            return true;
+        }
+    }
+
+    if (target == transition->current_theme) return true;
+
+    Ui_Icons next = {0};
+
+    if (!create_ui_icons(&next, target)) return false;
+
+    transition->next = next;
+    transition->target_theme = target;
+    transition->progress = 0.0f;
+    transition->active = true;
+    return true;
+}
+
+static void update_ui_icon_transition(Ui_Icon_Transition *transition,
+                                      float delta_time)
+{
+    if (!transition->active) return;
+
+    transition->progress += delta_time / THEME_TRANSITION_SECONDS;
+
+    if (transition->progress < 1.0f) return;
+
+    unload_ui_icons(&transition->current);
+    transition->current = transition->next;
+    transition->next = (Ui_Icons){0};
+    transition->current_theme = transition->target_theme;
+    transition->progress = 0.0f;
+    transition->active = false;
+}
+
+static float ui_icon_transition_amount(const Ui_Icon_Transition *transition)
+{
+    if (!transition->active) return 0.0f;
+
+    float progress = transition->progress;
+    return progress * progress * (3.0f - 2.0f * progress);
+}
+
+static void unload_ui_icon_transition(Ui_Icon_Transition *transition)
+{
+    unload_ui_icons(&transition->current);
+    unload_ui_icons(&transition->next);
+    *transition = (Ui_Icon_Transition){0};
 }
 
 static float clamp_float(float value, float minimum, float maximum)
@@ -556,7 +795,8 @@ static void album_art_update(Album_Art *album_art, const char *track_path)
     album_art->texture = texture;
 }
 
-static void draw_album_art(const Album_Art *album_art, Rectangle bounds)
+static void draw_album_art(const Album_Art *album_art, Rectangle bounds,
+                           const Ui_Theme *theme)
 {
     if (!IsTextureValid(album_art->texture) || bounds.width <= 0.0f ||
         bounds.height <= 0.0f) {
@@ -582,7 +822,7 @@ static void draw_album_art(const Album_Art *album_art, Rectangle bounds)
         (float)album_art->texture.height,
     };
 
-    DrawRectangleRec(bounds, (Color){24, 24, 24, 255});
+    DrawRectangleRec(bounds, theme->surface);
     DrawTexturePro(album_art->texture, source, destination, (Vector2){0}, 0.0f,
                    WHITE);
 }
@@ -603,7 +843,8 @@ static size_t spectrum_bar_count(Rectangle bounds, float scale)
 }
 
 static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
-                          size_t bar_count, float scale)
+                          size_t bar_count, float scale,
+                          const Ui_Theme *theme)
 {
     if (bar_count == 0 || bounds.width <= 0.0f || bounds.height <= 0.0f) {
         return;
@@ -622,7 +863,6 @@ static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
     float block_width =
         bar_width * (float)bar_count + bar_gap * (float)(bar_count - 1);
     float start_x = snap_pixel(bounds.x + (bounds.width - block_width) / 2.0f);
-    const Color bar_color = {210, 210, 210, 255};
 
     for (size_t bar = 0; bar < bar_count; ++bar) {
         float level = clamp_float(spectrum->levels[bar], 0.0f, 1.0f);
@@ -638,7 +878,7 @@ static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
             height,
         };
 
-        DrawRectangleRec(column, bar_color);
+        DrawRectangleRec(column, theme->spectrum);
     }
 }
 
@@ -890,50 +1130,60 @@ static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
     DrawTexturePro(texture, source, destination, origin, 0.0f, tint);
 }
 
+static Texture2D button_icon_texture(const Ui_Icons *icons, Button_Icon icon)
+{
+    switch (icon) {
+    case BUTTON_PREVIOUS:
+        return icons->back;
+    case BUTTON_PLAY:
+        return icons->play;
+    case BUTTON_PAUSE:
+        return icons->pause;
+    case BUTTON_NEXT:
+        return icons->forward;
+    case BUTTON_REPEAT:
+        return icons->repeat;
+    case BUTTON_REPEAT_ONE:
+        return icons->repeat_one;
+    case BUTTON_SHUFFLE:
+        return icons->shuffle;
+    }
+
+    return (Texture2D){0};
+}
+
 static void draw_button(Rectangle bounds, Button_Icon icon,
-                        const Ui_Icons *icons, Vector2 mouse, bool enabled,
-                        bool active)
+                        const Ui_Icon_Transition *icon_transition,
+                        Vector2 mouse, bool enabled, bool active,
+                        const Ui_Theme *theme)
 {
     bool hovered = enabled && CheckCollisionPointRec(mouse, bounds);
-    Color fill = enabled ? (Color){36, 36, 36, 255} : (Color){24, 24, 24, 255};
-    Color icon_color = enabled ? RAYWHITE : DARKGRAY;
-    Texture2D texture = {0};
+    Color fill = enabled ? theme->button : theme->button_disabled;
+    float opacity = enabled ? 1.0f : 0.35f;
 
-    if (active && enabled) fill = (Color){52, 52, 52, 255};
-    if (hovered) fill = (Color){68, 68, 68, 255};
+    if (active && enabled) fill = theme->button_active;
+    if (hovered) fill = theme->button_hover;
 
     DrawRectangleRec(bounds, fill);
 
-    switch (icon) {
-    case BUTTON_PREVIOUS:
-        texture = icons->back;
-        break;
-    case BUTTON_PLAY:
-        texture = icons->play;
-        break;
-    case BUTTON_PAUSE:
-        texture = icons->pause;
-        break;
-    case BUTTON_NEXT:
-        texture = icons->forward;
-        break;
-    case BUTTON_REPEAT:
-        texture = icons->repeat;
-        break;
-    case BUTTON_REPEAT_ONE:
-        texture = icons->repeat_one;
-        break;
-    case BUTTON_SHUFFLE:
-        texture = icons->shuffle;
-        break;
+    Texture2D current =
+        button_icon_texture(&icon_transition->current, icon);
+
+    if (!icon_transition->active) {
+        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
+        return;
     }
 
-    draw_texture_icon(texture, bounds, icon_color);
+    float amount = ui_icon_transition_amount(icon_transition);
+    Texture2D next = button_icon_texture(&icon_transition->next, icon);
+    draw_texture_icon(current, bounds, Fade(WHITE, opacity * (1.0f - amount)));
+    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
 }
 
 static void draw_playlist_panel(const Playlist *playlist,
                                 const Ui_Layout *layout, int scroll,
-                                size_t hovered_track, double text_started_at)
+                                size_t hovered_track, double text_started_at,
+                                const Ui_Theme *theme)
 {
     Rectangle panel = layout->playlist_panel;
     int title_size = crisp_font_size(35.0f * layout->scale, 30, 50);
@@ -941,17 +1191,19 @@ static void draw_playlist_panel(const Playlist *playlist,
     size_t count = playlist_get_count(playlist);
     size_t current = playlist_get_current(playlist);
 
-    DrawRectangleRec(panel, (Color){24, 24, 24, 255});
+    DrawRectangleRec(panel, theme->surface);
     DrawLine((int)panel.x, (int)panel.y, (int)panel.x,
-             (int)(panel.y + panel.height), (Color){55, 55, 55, 255});
+             (int)(panel.y + panel.height), theme->surface_border);
     draw_text("Playlist", (int)snap_pixel(panel.x + 20.0f * layout->scale),
               (int)snap_pixel(panel.y + 20.0f * layout->scale),
-              crisp_font_size(35.0f * layout->scale, 30, 50), RAYWHITE);
+              crisp_font_size(35.0f * layout->scale, 30, 50),
+              theme->text_primary);
 
     if (count == 0) {
         draw_text("No tracks", (int)snap_pixel(panel.x + 20.0f * layout->scale),
                   (int)snap_pixel(panel.y + 70.0f * layout->scale),
-                  crisp_font_size(25.0f * layout->scale, 20, 40), GRAY);
+                  crisp_font_size(25.0f * layout->scale, 20, 40),
+                  theme->text_muted);
         return;
     }
 
@@ -964,10 +1216,10 @@ static void draw_playlist_panel(const Playlist *playlist,
         Rectangle item = playlist_item_bounds(layout, visible_index);
 
         bool hovered = index == hovered_track;
-        Color fill = index == current ? (Color){58, 58, 58, 255}
-                                      : (Color){31, 31, 31, 255};
+        Color fill = index == current ? theme->playlist_current
+                                      : theme->playlist_item;
 
-        if (hovered && index != current) fill = (Color){44, 44, 44, 255};
+        if (hovered && index != current) fill = theme->playlist_hover;
 
         DrawRectangleRec(item, fill);
 
@@ -982,7 +1234,8 @@ static void draw_playlist_panel(const Playlist *playlist,
         bool has_album = metadata->album[0] != '\0';
         float text_x = snap_pixel(item.x + 10.0f);
         float text_width = item.width - 20.0f;
-        Color title_color = index == current ? RAYWHITE : LIGHTGRAY;
+        Color title_color = index == current ? theme->text_primary
+                                             : theme->text_secondary;
 
         if (!has_artist && !has_album) {
             Rectangle title_bounds = {
@@ -1001,7 +1254,8 @@ static void draw_playlist_panel(const Playlist *playlist,
                 text_width,
                 (float)title_size,
             };
-            Color details_color = index == current ? LIGHTGRAY : GRAY;
+            Color details_color = index == current ? theme->text_secondary
+                                                   : theme->text_muted;
             char details[METADATA_TEXT_SIZE * 2 + 4];
 
             if (has_artist && has_album) {
@@ -1030,15 +1284,28 @@ static void draw_playlist_panel(const Playlist *playlist,
 }
 
 static void draw_playlist_toggle(Rectangle bounds, bool open,
-                                 const Ui_Icons *icons, Vector2 mouse,
-                                 float opacity)
+                                 const Ui_Icon_Transition *icon_transition,
+                                 Vector2 mouse, float opacity,
+                                 const Ui_Theme *theme)
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
-    Color fill = hovered ? (Color){58, 58, 58, 255} : (Color){36, 36, 36, 255};
+    Color fill = hovered ? theme->button_hover : theme->button;
 
     DrawRectangleRec(bounds, Fade(fill, opacity));
-    draw_texture_icon(open ? icons->playlist_back : icons->playlist_forward,
-                      bounds, Fade(RAYWHITE, opacity));
+    Texture2D current = open ? icon_transition->current.playlist_back
+                             : icon_transition->current.playlist_forward;
+
+    if (!icon_transition->active) {
+        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
+        return;
+    }
+
+    float amount = ui_icon_transition_amount(icon_transition);
+    Texture2D next = open ? icon_transition->next.playlist_back
+                          : icon_transition->next.playlist_forward;
+    draw_texture_icon(current, bounds,
+                      Fade(WHITE, opacity * (1.0f - amount)));
+    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
 }
 
 typedef struct {
@@ -1213,17 +1480,23 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const Color background = {18, 18, 18, 255};
-    const Color progress_background = {55, 55, 55, 255};
-    const Color progress_foreground = {230, 230, 230, 255};
-    const Color progress_hover = {255, 255, 255, 255};
+    System_Theme_Monitor system_theme_monitor;
+    system_theme_monitor_init(&system_theme_monitor);
+    System_Theme system_theme =
+        system_theme_monitor_get(&system_theme_monitor);
+    Ui_Theme_Transition theme_transition = {
+        .current = *ui_theme_for(system_theme),
+        .target = *ui_theme_for(system_theme),
+    };
+    const Ui_Theme *theme = &theme_transition.current;
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_title);
 
-    Ui_Icons icons = {0};
+    Ui_Icon_Transition icon_transition = {0};
 
     if (!set_window_icon()) {
+        system_theme_monitor_uninit(&system_theme_monitor);
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1232,6 +1505,7 @@ int main(int argc, char **argv)
     }
 
     if (!load_fonts()) {
+        system_theme_monitor_uninit(&system_theme_monitor);
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1239,7 +1513,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!create_ui_icons(&icons)) {
+    if (!init_ui_icon_transition(&icon_transition, system_theme)) {
+        system_theme_monitor_uninit(&system_theme_monitor);
         unload_fonts();
         CloseWindow();
         playlist_uninit(&playlist);
@@ -1250,6 +1525,8 @@ int main(int argc, char **argv)
 
     SetWindowMinSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
     SetTargetFPS(60);
+    mp_log(INFO, "theme: %s",
+           system_theme == SYSTEM_THEME_DARK ? "dark" : "light");
 
     Album_Art album_art = {0};
     Spectrum spectrum;
@@ -1270,6 +1547,25 @@ int main(int argc, char **argv)
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
 
     while (!WindowShouldClose()) {
+        float ui_frame_time = GetFrameTime();
+
+        if (system_theme_monitor_update(&system_theme_monitor, GetTime())) {
+            System_Theme detected_theme =
+                system_theme_monitor_get(&system_theme_monitor);
+
+            if (begin_ui_icon_transition(&icon_transition, detected_theme)) {
+                system_theme = detected_theme;
+                begin_theme_transition(&theme_transition, system_theme);
+                mp_log(INFO, "theme: %s",
+                       system_theme == SYSTEM_THEME_DARK ? "dark" : "light");
+            } else {
+                mp_log(WARNING, "failed to switch application theme");
+            }
+        }
+
+        update_theme_transition(&theme_transition, ui_frame_time);
+        update_ui_icon_transition(&icon_transition, ui_frame_time);
+
         if (IsWindowResized()) {
             spectrum_resume_at =
                 GetTime() + SPECTRUM_RESIZE_SETTLE_SECONDS;
@@ -1341,7 +1637,6 @@ int main(int argc, char **argv)
 
         Vector2 mouse = GetMousePosition();
         float mouse_wheel = GetMouseWheelMove();
-        float ui_frame_time = GetFrameTime();
         playlist_panel_animation = animate_towards(
             playlist_panel_animation, playlist_open && has_track ? 1.0f : 0.0f,
             PLAYLIST_PANEL_ANIMATION_SPEED, ui_frame_time);
@@ -1809,7 +2104,7 @@ int main(int argc, char **argv)
         }
 
         BeginDrawing();
-        ClearBackground(background);
+        ClearBackground(theme->background);
 
         if (!has_track) {
             const char *drop_text = "Drag & Drop Files";
@@ -1819,59 +2114,65 @@ int main(int argc, char **argv)
             int drop_text_y = (layout.height - drop_text_size) / 2;
 
             draw_text(drop_text, drop_text_x, drop_text_y, drop_text_size,
-                      RAYWHITE);
+                      theme->text_primary);
         } else {
-            draw_album_art(&album_art, layout.album_art);
-            draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale);
+            draw_album_art(&album_art, layout.album_art, theme);
+            draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale,
+                          theme);
             draw_scrolling_text(metadata.title, current_title_bounds,
-                                layout.title_size, layout.scale, RAYWHITE,
-                                current_title_hovered,
+                                layout.title_size, layout.scale,
+                                theme->text_primary, current_title_hovered,
                                 current_title_text_started_at);
             draw_text(details_text, (int)layout.title_x, (int)layout.details_y,
-                      layout.status_size, GRAY);
+                      layout.status_size, theme->text_muted);
             draw_text(status, status_x, (int)layout.metadata_y,
-                      layout.status_size, LIGHTGRAY);
+                      layout.status_size, theme->text_secondary);
             draw_text(playlist_text, playlist_x, (int)layout.metadata_y,
-                      layout.status_size, DARKGRAY);
+                      layout.status_size, theme->text_faint);
             draw_text(time_text, time_x, (int)layout.metadata_y,
-                      layout.status_size, GRAY);
+                      layout.status_size, theme->text_muted);
             draw_text(volume_text, volume_x, (int)layout.metadata_y,
-                      layout.status_size, volume_hovered ? LIGHTGRAY : GRAY);
+                      layout.status_size,
+                      volume_hovered ? theme->text_secondary
+                                     : theme->text_muted);
 
-            DrawRectangleRec(layout.progress_bar, progress_background);
+            DrawRectangleRec(layout.progress_bar, theme->progress_background);
             DrawRectangleRec(progress_fill, progress_hovered
-                                                ? progress_hover
-                                                : progress_foreground);
+                                                ? theme->progress_hover
+                                                : theme->progress_foreground);
             float radius_scale = progress_hovered ? 7.0f : 5.0f;
             float handle_radius = snap_pixel(radius_scale * layout.scale);
             Color handle_color =
-                progress_hovered ? progress_hover : progress_foreground;
+                progress_hovered ? theme->progress_hover
+                                 : theme->progress_foreground;
             DrawCircleV(progress_handle, handle_radius, handle_color);
 
-            draw_button(layout.previous_button, BUTTON_PREVIOUS, &icons, mouse,
-                        can_previous, false);
+            draw_button(layout.previous_button, BUTTON_PREVIOUS,
+                        &icon_transition, mouse, can_previous, false, theme);
             draw_button(layout.play_button,
                         state == PLAYER_PLAYING ? BUTTON_PAUSE : BUTTON_PLAY,
-                        &icons, mouse, true, false);
-            draw_button(layout.next_button, BUTTON_NEXT, &icons, mouse,
-                        can_next, false);
+                        &icon_transition, mouse, true, false, theme);
+            draw_button(layout.next_button, BUTTON_NEXT, &icon_transition,
+                        mouse, can_next, false, theme);
             draw_button(layout.repeat_button,
                         repeat_mode == REPEAT_ONE ? BUTTON_REPEAT_ONE
                                                   : BUTTON_REPEAT,
-                        &icons, mouse, true, repeat_mode != REPEAT_OFF);
-            draw_button(layout.shuffle_button, BUTTON_SHUFFLE, &icons, mouse,
-                        true, shuffle_enabled);
+                        &icon_transition, mouse, true,
+                        repeat_mode != REPEAT_OFF, theme);
+            draw_button(layout.shuffle_button, BUTTON_SHUFFLE,
+                        &icon_transition, mouse, true, shuffle_enabled, theme);
         }
 
         if (playlist_panel_visible) {
             draw_playlist_panel(&playlist, &layout, playlist_scroll,
                                 hovered_playlist_track,
-                                playlist_text_started_at);
+                                playlist_text_started_at, theme);
         }
 
         if (playlist_toggle_visible) {
-            draw_playlist_toggle(playlist_toggle_bounds, playlist_open, &icons,
-                                 mouse, playlist_toggle_animation);
+            draw_playlist_toggle(playlist_toggle_bounds, playlist_open,
+                                 &icon_transition, mouse,
+                                 playlist_toggle_animation, theme);
         }
 
         EndDrawing();
@@ -1893,8 +2194,9 @@ int main(int argc, char **argv)
     }
 
     album_art_clear(&album_art);
-    unload_ui_icons(&icons);
+    unload_ui_icon_transition(&icon_transition);
     unload_fonts();
+    system_theme_monitor_uninit(&system_theme_monitor);
     CloseWindow();
 
     playlist_uninit(&playlist);

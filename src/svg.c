@@ -42,16 +42,6 @@ Texture2D svg_load_texture(const char *name, const unsigned char *data,
         return (Texture2D){0};
     }
 
-    for (NSVGshape *shape = svg->shapes; shape != NULL; shape = shape->next) {
-        if (shape->fill.type == NSVG_PAINT_COLOR) {
-            shape->fill.color = 0xffffffffu;
-        }
-
-        if (shape->stroke.type == NSVG_PAINT_COLOR) {
-            shape->stroke.color = 0xffffffffu;
-        }
-    }
-
     NSVGrasterizer *rasterizer = nsvgCreateRasterizer();
     size_t pixel_count = (size_t)size * (size_t)size;
     unsigned char *pixels = calloc(pixel_count, 4);

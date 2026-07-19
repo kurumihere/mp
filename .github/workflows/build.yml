@@ -61,6 +61,7 @@ jobs:
             libgl1-mesa-dev \
             libx11-dev \
             libxcursor-dev \
+            libglib2.0-dev \
             libxi-dev \
             libxinerama-dev \
             libxrandr-dev
@@ -85,7 +86,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           package="mp-${version}-${{ matrix.package }}"
           mkdir -p "dist/${package}"
-          cp build/mp LICENSE README.md assets/OFL.txt "dist/${package}/"
+          cp build/mp LICENSE README.md assets/fonts/OFL.txt "dist/${package}/"
           tar -czf "dist/${package}.tar.gz" -C dist "${package}"
 
       - name: package
@@ -95,7 +96,7 @@ jobs:
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           $package = "mp-$version-${{ matrix.package }}"
           New-Item -ItemType Directory -Path "dist/$package" | Out-Null
-          Copy-Item build/mp.exe, LICENSE, README.md, assets/OFL.txt -Destination "dist/$package"
+          Copy-Item build/mp.exe, LICENSE, README.md, assets/fonts/OFL.txt -Destination "dist/$package"
           Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
 
       - name: upload
