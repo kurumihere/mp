@@ -79,6 +79,12 @@ static bool update_input_paths(Playlist *playlist, const char *const *paths,
         return false;
     }
 
+    if (!replace && playlist_get_count(playlist) > 0 &&
+        !playlist_select(&replacement, playlist_get_current(playlist))) {
+        playlist_uninit(&replacement);
+        return false;
+    }
+
     if (added != NULL) {
         *added = replacement.count - (replace ? 0 : playlist->count);
     }
