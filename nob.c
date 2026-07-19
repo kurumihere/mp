@@ -104,13 +104,18 @@ static bool build_app(const Build *build)
                "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare",
                "-Wno-format", "-Wno-missing-braces",
                "-Wno-missing-field-initializers", "-fno-strict-aliasing",
+               "-Werror=implicit-function-declaration",
                "-DPLATFORM_DESKTOP_GLFW", "-DGRAPHICS_API_OPENGL_33",
                "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
                "-DSUPPORT_FILEFORMAT_JPG=1", "-I", "thirdparty/raylib/src",
                "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
                "thirdparty/miniaudio", "-I", "thirdparty/nanosvg");
 
-    if (build->platform == PLATFORM_LINUX) cmd_append(&cmd, "-D_GLFW_X11");
+    if (build->platform == PLATFORM_LINUX) {
+        cmd_append(&cmd, "-D_GLFW_X11");
+    } else if (build->platform == PLATFORM_WINDOWS) {
+        cmd_append(&cmd, "-DUNICODE");
+    }
 
     da_append_many(&cmd, app_sources, ARRAY_LEN(app_sources));
     da_append_many(&cmd, raylib_sources, ARRAY_LEN(raylib_sources));
