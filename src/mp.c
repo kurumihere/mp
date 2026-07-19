@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define FLAG_IMPLEMENTATION
+#include "flag.h"
+
 #include "log.h"
 #include "m3u.h"
 #include "metadata.h"
@@ -17,6 +20,7 @@
 
 #define ASSET_PATH_SIZE 4096
 #define DEFAULT_FONT_BASE_SIZE 96
+#define MP_VERSION "0.1.1"
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 32
@@ -987,6 +991,21 @@ static void draw_playlist_toggle(Rectangle bounds, bool open,
 
 int main(int argc, char **argv)
 {
+    bool *version = flag_bool("v", false, "print version");
+
+    if (!flag_parse(argc, argv)) {
+        flag_print_error(stderr);
+        return 1;
+    }
+
+    if (*version) {
+        printf("mp %s\n", MP_VERSION);
+        return 0;
+    }
+
+    argc = flag_rest_argc();
+    argv = flag_rest_argv();
+
     Player player;
 
     if (!player_init(&player)) return 1;
@@ -1002,7 +1021,7 @@ int main(int argc, char **argv)
 
     const char *window_title = "mp";
     const char *playlist_file_path =
-        argc == 2 && m3u_is_path(argv[1]) ? argv[1] : "playlist.m3u";
+        argc == 1 && m3u_is_path(argv[0]) ? argv[0] : "playlist.m3u";
     Track_Metadata metadata = {0};
     Session_State session_state;
     session_state_defaults(&session_state);
@@ -1017,11 +1036,11 @@ int main(int argc, char **argv)
                                       &session_state) == SESSION_LOAD_OK;
     }
 
-    bool restore_playback = session_loaded && argc == 1;
+    bool restore_playback = session_loaded && argc == 0;
 
-    if (argc > 1) {
-        if (!update_input_paths(&playlist, (const char *const *)&argv[1],
-                                (size_t)(argc - 1), true, NULL)) {
+    if (argc > 0) {
+        if (!update_input_paths(&playlist, (const char *const *)argv,
+                                (size_t)argc, true, NULL)) {
             playlist_clear(&playlist);
         }
 

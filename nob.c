@@ -68,6 +68,7 @@ static int app_needs_rebuild(const Build *build)
     };
     File_Paths inputs = {0};
     da_append(&inputs, "nob.c");
+    da_append(&inputs, "thirdparty/flag.h");
     da_append(&inputs, "thirdparty/nob.h");
 
     for (size_t i = 0; i < ARRAY_LEN(roots); ++i) {
@@ -143,7 +144,7 @@ static void append_platform_options(Cmd *cmd, Platform platform)
 
 static void append_compile_options(Cmd *cmd, Platform platform)
 {
-    cmd_append(cmd, "-std=c99", "-g", "-Wall",
+    cmd_append(cmd, "-std=c11", "-g", "-Wall",
                "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare",
                "-Wno-format", "-Wno-missing-braces",
                "-Wno-missing-field-initializers", "-fno-strict-aliasing",
@@ -152,7 +153,8 @@ static void append_compile_options(Cmd *cmd, Platform platform)
                "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
                "-DSUPPORT_FILEFORMAT_JPG=1", "-I", "thirdparty/raylib/src",
                "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
-               "thirdparty/miniaudio", "-I", "thirdparty/nanosvg");
+               "thirdparty/miniaudio", "-I", "thirdparty/nanosvg", "-I",
+               "thirdparty");
 
     if (platform == MP_PLATFORM_LINUX) {
         cmd_append(cmd, "-D_GLFW_X11");
