@@ -24,6 +24,7 @@
 #define PLAYLIST_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
+#define SEEK_STEP_SECONDS 5.0f
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
 #define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
@@ -1643,6 +1644,27 @@ int main(int argc, char **argv)
 
         float cursor = player_get_cursor(&player);
         float length = player_get_length(&player);
+        bool shift_down =
+            IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        float keyboard_seek = 0.0f;
+
+        if (has_track && !seek_dragging && shift_down) {
+            if (IsKeyPressed(KEY_COMMA)) keyboard_seek -= SEEK_STEP_SECONDS;
+            if (IsKeyPressed(KEY_PERIOD)) keyboard_seek += SEEK_STEP_SECONDS;
+        }
+
+        if (keyboard_seek != 0.0f) {
+            cursor += keyboard_seek;
+
+            if (cursor < 0.0f) cursor = 0.0f;
+            if (length > 0.0f && cursor > length) cursor = length;
+
+            if (!player_seek(&player, cursor)) {
+                exit_code = 1;
+                break;
+            }
+        }
+
         bool progress_hovered =
             has_track && !sidebar_blocks_mouse &&
             CheckCollisionPointRec(mouse, layout.progress_hitbox);
