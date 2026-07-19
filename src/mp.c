@@ -935,7 +935,7 @@ int main(int argc, char **argv)
     const int w_width = 1000;
     const int w_height = 700;
 
-    const char *window_title = "Music Player";
+    const char *window_title = "mp";
     const char *playlist_file_path =
         argc == 2 && m3u_is_path(argv[1]) ? argv[1] : "playlist.m3u";
     Track_Metadata metadata = {0};

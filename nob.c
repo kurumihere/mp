@@ -41,6 +41,45 @@ static const char *raylib_sources[] = {
     "thirdparty/raylib/src/rtext.c",
 };
 
+static bool collect_source_file(Walk_Entry entry)
+{
+    if (entry.type != FILE_REGULAR) return true;
+
+    String_View path = sv_from_cstr(entry.path);
+    if (!sv_ends_with_cstr(path, ".c") && !sv_ends_with_cstr(path, ".h") &&
+        !sv_ends_with_cstr(path, ".m")) {
+        return true;
+    }
+
+    File_Paths *inputs = entry.data;
+    da_append(inputs, temp_strdup(entry.path));
+    return true;
+}
+
+static int app_needs_rebuild(const Build *build)
+{
+    const char *roots[] = {
+        "src",
+        "thirdparty/miniaudio",
+        "thirdparty/nanosvg",
+        "thirdparty/raylib/src",
+    };
+    File_Paths inputs = {0};
+    da_append(&inputs, "nob.c");
+    da_append(&inputs, "thirdparty/nob.h");
+
+    for (size_t i = 0; i < ARRAY_LEN(roots); ++i) {
+        if (!walk_dir(roots[i], collect_source_file, .data = &inputs)) {
+            da_free(inputs);
+            return -1;
+        }
+    }
+
+    int result = needs_rebuild(build->executable, inputs.items, inputs.count);
+    da_free(inputs);
+    return result;
+}
+
 static const char *environment_tool(const char *name)
 {
     const char *value = getenv(name);
@@ -158,7 +197,7 @@ static int usage(const char *program)
 
 int main(int argc, char **argv)
 {
-    GO_REBUILD_URSELF(argc, argv);
+    GO_REBUILD_URSELF_PLUS(argc, argv, "thirdparty/nob.h");
 
     const char *program = shift(argv, argc);
     const char *command = argc > 0 ? shift(argv, argc) : "build";
@@ -178,7 +217,13 @@ int main(int argc, char **argv)
     if (!mkdir_if_not_exists("build")) return 1;
 
     Build build = configure_build(wine);
-    if (!build_app(&build)) return 1;
+    int rebuild = app_needs_rebuild(&build);
+    if (rebuild < 0) return 1;
+    if (rebuild > 0) {
+        if (!build_app(&build)) return 1;
+    } else {
+        nob_log(INFO, "%s is up to date", build.executable);
+    }
     if (run && !run_app(&build, argc, argv)) return 1;
     return 0;
 }
