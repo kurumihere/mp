@@ -267,6 +267,36 @@ static bool make_asset_path(char *path, size_t capacity, const char *directory,
     return written >= 0 && (size_t)written < capacity;
 }
 
+static bool set_window_icon(const char *asset_directory)
+{
+    char path[ASSET_PATH_SIZE];
+
+    if (!make_asset_path(path, sizeof(path), asset_directory, "icon.png")) {
+        mp_log(ERROR, "icon path is too long");
+        return false;
+    }
+
+    Image icon = LoadImage(path);
+
+    if (!IsImageValid(icon)) {
+        mp_log(ERROR, "failed to load application icon: %s", path);
+        return false;
+    }
+
+    ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+    if (!IsImageValid(icon) ||
+        icon.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
+        mp_log(ERROR, "failed to convert application icon: %s", path);
+        UnloadImage(icon);
+        return false;
+    }
+
+    SetWindowIcon(icon);
+    UnloadImage(icon);
+    return true;
+}
+
 static bool load_default_font(const char *asset_directory)
 {
     char path[ASSET_PATH_SIZE];
@@ -1113,6 +1143,14 @@ int main(int argc, char **argv)
 
     if (!resolve_asset_directory(asset_directory, sizeof(asset_directory))) {
         mp_log(ERROR, "failed to locate application assets");
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
+
+    if (!set_window_icon(asset_directory)) {
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
