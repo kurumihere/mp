@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      package:
-        description: Package release archives
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       package:
@@ -53,12 +48,12 @@ jobs:
             extension: tar.gz
 
     steps:
-      - name: Check out repository
+      - name: checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Install Linux dependencies
+      - name: install linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -70,23 +65,20 @@ jobs:
             libxinerama-dev \
             libxrandr-dev
 
-      - name: Set up MSYS2
+      - name: setup msys2
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           install: mingw-w64-ucrt-x86_64-gcc
 
-      - name: Bootstrap nob
+      - name: bootstrap
         run: cc -std=c99 -o nob nob.c
 
-      - name: Clean build
+      - name: build
         run: ./nob
 
-      - name: Incremental build
-        run: ./nob
-
-      - name: Package
+      - name: package
         if: inputs.package && runner.os != 'Windows'
         shell: bash
         run: |
@@ -97,7 +89,7 @@ jobs:
           cp -R assets "dist/${package}/assets"
           tar -czf "dist/${package}.tar.gz" -C dist "${package}"
 
-      - name: Package
+      - name: package
         if: inputs.package && runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -108,7 +100,7 @@ jobs:
           Copy-Item assets -Destination "dist/$package/assets" -Recurse
           Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
 
-      - name: Upload package
+      - name: upload
         if: inputs.package
         uses: actions/upload-artifact@v7
         with:

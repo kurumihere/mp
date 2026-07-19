@@ -21,22 +21,25 @@ jobs:
       contents: write
 
     steps:
-      - name: Download packages
+      - name: download
         uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
 
-      - name: Create checksums
-        run: cd dist && sha256sum mp-* > SHA256SUMS
+      - name: checksums
+        working-directory: dist
+        run: sha256sum mp-* > sha256sums.txt
 
-      - name: Publish release
+      - name: create draft
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: >-
           gh release create "${GITHUB_REF_NAME}"
           dist/*
+          --draft
+          --notes ""
+          --title "${GITHUB_REF_NAME}"
           --verify-tag
-          --generate-notes
