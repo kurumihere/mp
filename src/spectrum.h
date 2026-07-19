@@ -16,6 +16,7 @@ typedef struct {
 } Spectrum;
 
 void spectrum_init(Spectrum *spectrum);
+void spectrum_decay(Spectrum *spectrum, float delta_time);
 void spectrum_reset(Spectrum *spectrum);
 void spectrum_update(Spectrum *spectrum,
                      const float samples[SPECTRUM_SAMPLE_COUNT],

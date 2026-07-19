@@ -21,9 +21,18 @@
 #define FONT_SIZE_STEP 10
 #define FONT_COUNT ((FONT_MAX_SIZE - FONT_MIN_SIZE) / FONT_SIZE_STEP + 1)
 #define MP_VERSION "0.1.1"
+#define PLAYLIST_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
+#define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
+#define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
+#define UI_BUTTON_ICON_SIZE 72
+#define UI_TOGGLE_ICON_SIZE 48
+#define WINDOW_HEIGHT 700
+#define WINDOW_MIN_HEIGHT 480
+#define WINDOW_MIN_WIDTH 640
+#define WINDOW_WIDTH 1000
 
 static Font fonts[FONT_COUNT];
 
@@ -207,8 +216,6 @@ typedef struct {
     Texture2D shuffle;
     Texture2D playlist_back;
     Texture2D playlist_forward;
-    int button_size;
-    int toggle_size;
 } Ui_Icons;
 
 typedef struct {
@@ -431,30 +438,27 @@ static Texture2D load_asset_texture(const char *directory, const char *name,
     return svg_load_texture(path, size, content_scale);
 }
 
-static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory,
-                            int button_size, int toggle_size)
+static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory)
 {
     *icons = (Ui_Icons){
-        .back =
-            load_asset_texture(asset_directory, "back.svg", button_size, 0.74f),
+        .back = load_asset_texture(asset_directory, "back.svg",
+                                   UI_BUTTON_ICON_SIZE, 0.74f),
         .forward = load_asset_texture(asset_directory, "forward.svg",
-                                      button_size, 0.74f),
-        .pause = load_asset_texture(asset_directory, "pause.svg", button_size,
-                                    0.72f),
-        .play =
-            load_asset_texture(asset_directory, "play.svg", button_size, 0.72f),
-        .repeat = load_asset_texture(asset_directory, "repeat.svg", button_size,
-                                     0.68f),
+                                      UI_BUTTON_ICON_SIZE, 0.74f),
+        .pause = load_asset_texture(asset_directory, "pause.svg",
+                                    UI_BUTTON_ICON_SIZE, 0.72f),
+        .play = load_asset_texture(asset_directory, "play.svg",
+                                   UI_BUTTON_ICON_SIZE, 0.72f),
+        .repeat = load_asset_texture(asset_directory, "repeat.svg",
+                                     UI_BUTTON_ICON_SIZE, 0.68f),
         .repeat_one = load_asset_texture(asset_directory, "repeat-one.svg",
-                                         button_size, 0.68f),
+                                         UI_BUTTON_ICON_SIZE, 0.68f),
         .shuffle = load_asset_texture(asset_directory, "shuffle.svg",
-                                      button_size, 0.68f),
-        .playlist_back =
-            load_asset_texture(asset_directory, "back.svg", toggle_size, 0.88f),
+                                      UI_BUTTON_ICON_SIZE, 0.68f),
+        .playlist_back = load_asset_texture(asset_directory, "back.svg",
+                                            UI_TOGGLE_ICON_SIZE, 0.88f),
         .playlist_forward = load_asset_texture(asset_directory, "forward.svg",
-                                               toggle_size, 0.88f),
-        .button_size = button_size,
-        .toggle_size = toggle_size,
+                                               UI_TOGGLE_ICON_SIZE, 0.88f),
     };
 
     Texture2D textures[] = {
@@ -473,32 +477,23 @@ static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory,
     return true;
 }
 
-static bool update_ui_icons(Ui_Icons *icons, const char *asset_directory,
-                            int button_size, int toggle_size)
-{
-    if (icons->button_size == button_size &&
-        icons->toggle_size == toggle_size) {
-        return true;
-    }
-
-    Ui_Icons replacement;
-
-    if (!create_ui_icons(&replacement, asset_directory, button_size,
-                         toggle_size)) {
-        return false;
-    }
-
-    unload_ui_icons(icons);
-    *icons = replacement;
-    return true;
-}
-
 static float clamp_float(float value, float minimum, float maximum)
 {
     if (value < minimum) return minimum;
     if (value > maximum) return maximum;
 
     return value;
+}
+
+static float animate_towards(float current, float target, float speed,
+                             float delta_time)
+{
+    float frame_time = clamp_float(delta_time, 0.0f, 0.05f);
+    float result = target + (current - target) * expf(-speed * frame_time);
+
+    if (fabsf(result - target) < 0.001f) return target;
+
+    return result;
 }
 
 static float snap_pixel(float value)
@@ -715,8 +710,11 @@ static int crisp_font_size(float desired, int minimum, int maximum)
     return size;
 }
 
-static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
+static Ui_Layout make_ui_layout(int width, int height,
+                                float playlist_open_amount)
 {
+    playlist_open_amount = clamp_float(playlist_open_amount, 0.0f, 1.0f);
+
     float horizontal_scale = (float)width / 1000.0f;
     float vertical_scale = (float)height / 700.0f;
     float scale =
@@ -773,6 +771,14 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         panel_x = (float)width - panel_width;
     }
 
+    float open_panel_x = panel_x;
+    float open_toggle_x = open_panel_x - gap - toggle_width;
+    float closed_toggle_x = (float)width - toggle_width;
+    panel_x = (float)width +
+              (open_panel_x - (float)width) * playlist_open_amount;
+    float toggle_x = closed_toggle_x +
+                     (open_toggle_x - closed_toggle_x) * playlist_open_amount;
+
     Ui_Layout layout = {
         .scale = scale,
         .width = width,
@@ -804,8 +810,7 @@ static Ui_Layout make_ui_layout(int width, int height, bool playlist_open)
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
         .playlist_toggle =
             {
-                playlist_open ? panel_x - gap - toggle_width
-                              : (float)width - toggle_width,
+                toggle_x,
                 ((float)height - toggle_height) / 2.0f,
                 toggle_width,
                 toggle_height,
@@ -1042,14 +1047,15 @@ static void draw_playlist_panel(const Playlist *playlist,
 }
 
 static void draw_playlist_toggle(Rectangle bounds, bool open,
-                                 const Ui_Icons *icons, Vector2 mouse)
+                                 const Ui_Icons *icons, Vector2 mouse,
+                                 float opacity)
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
     Color fill = hovered ? (Color){58, 58, 58, 255} : (Color){36, 36, 36, 255};
 
-    DrawRectangleRec(bounds, fill);
+    DrawRectangleRec(bounds, Fade(fill, opacity));
     draw_texture_icon(open ? icons->playlist_back : icons->playlist_forward,
-                      bounds, RAYWHITE);
+                      bounds, Fade(RAYWHITE, opacity));
 }
 
 typedef struct {
@@ -1141,9 +1147,6 @@ int main(int argc, char **argv)
     Playback_Order playback_order;
     playback_order_init(&playback_order);
 
-    const int w_width = 1000;
-    const int w_height = 700;
-
     const char *window_title = "mp";
     const char *playlist_file_path =
         argc == 1 && m3u_is_path(argv[0]) ? argv[0] : "playlist.m3u";
@@ -1231,7 +1234,7 @@ int main(int argc, char **argv)
     const Color progress_hover = {255, 255, 255, 255};
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(w_width, w_height, window_title);
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_title);
 
     Ui_Icons icons = {0};
     char asset_directory[ASSET_PATH_SIZE];
@@ -1261,7 +1264,16 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    SetWindowMinSize(480, 320);
+    if (!create_ui_icons(&icons, asset_directory)) {
+        unload_fonts();
+        CloseWindow();
+        playlist_uninit(&playlist);
+        playback_order_uninit(&playback_order);
+        player_uninit(&player);
+        return 1;
+    }
+
+    SetWindowMinSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
     SetTargetFPS(60);
 
     Album_Art album_art = {0};
@@ -1270,16 +1282,24 @@ int main(int argc, char **argv)
     int exit_code = 0;
     int playlist_scroll = 0;
     bool playlist_open = false;
+    float playlist_panel_animation = 0.0f;
+    float playlist_toggle_animation = 0.0f;
     size_t playlist_text_track = PLAYLIST_TRACK_NONE;
     double playlist_text_started_at = GetTime();
     size_t current_title_text_track = PLAYLIST_TRACK_NONE;
     double current_title_text_started_at = GetTime();
+    double spectrum_resume_at = 0.0;
     bool finished_handled = false;
     bool seek_dragging = false;
     bool seek_resume_playback = false;
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
 
     while (!WindowShouldClose()) {
+        if (IsWindowResized()) {
+            spectrum_resume_at =
+                GetTime() + SPECTRUM_RESIZE_SETTLE_SECONDS;
+        }
+
         if (IsFileDropped()) {
             FilePathList dropped_files = LoadDroppedFiles();
 
@@ -1346,36 +1366,36 @@ int main(int argc, char **argv)
 
         Vector2 mouse = GetMousePosition();
         float mouse_wheel = GetMouseWheelMove();
-        Ui_Layout layout =
-            make_ui_layout(GetScreenWidth(), GetScreenHeight(), playlist_open);
-        bool playlist_toggle_visible =
+        float ui_frame_time = GetFrameTime();
+        playlist_panel_animation = animate_towards(
+            playlist_panel_animation, playlist_open && has_track ? 1.0f : 0.0f,
+            PLAYLIST_PANEL_ANIMATION_SPEED, ui_frame_time);
+        Ui_Layout layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
+                                          playlist_panel_animation);
+        bool playlist_panel_visible =
+            has_track && playlist_panel_animation > 0.001f;
+        bool playlist_toggle_target =
             has_track &&
             (playlist_open ||
              CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
+        playlist_toggle_animation = animate_towards(
+            playlist_toggle_animation, playlist_toggle_target ? 1.0f : 0.0f,
+            PLAYLIST_TOGGLE_ANIMATION_SPEED, ui_frame_time);
+        bool playlist_toggle_visible =
+            has_track && playlist_toggle_animation > 0.001f;
+        Rectangle playlist_toggle_bounds = layout.playlist_toggle;
+        playlist_toggle_bounds.x = snap_pixel(
+            playlist_toggle_bounds.x +
+            playlist_toggle_bounds.width * (1.0f - playlist_toggle_animation));
 
         bool playlist_toggled =
             playlist_toggle_visible &&
-            button_pressed(layout.playlist_toggle, mouse, true);
+            button_pressed(playlist_toggle_bounds, mouse, true);
 
         if (playlist_toggled) {
             playlist_open = !playlist_open;
 
             if (playlist_open) playlist_text_started_at = GetTime();
-
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
-                                    playlist_open);
-            playlist_toggle_visible =
-                playlist_open ||
-                CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal);
-        }
-
-        int button_icon_size = (int)(layout.play_button.width + 0.5f);
-        int toggle_icon_size = (int)(layout.playlist_toggle.width + 0.5f);
-
-        if (!update_ui_icons(&icons, asset_directory, button_icon_size,
-                             toggle_icon_size)) {
-            exit_code = 1;
-            break;
         }
 
         size_t track_count = playlist_get_count(&playlist);
@@ -1389,7 +1409,7 @@ int main(int argc, char **argv)
         }
 
         bool mouse_over_playlist =
-            has_track && playlist_open &&
+            playlist_panel_visible &&
             CheckCollisionPointRec(mouse, layout.playlist_panel);
         size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
 
@@ -1499,15 +1519,18 @@ int main(int argc, char **argv)
 
         if (!has_track) {
             playlist_open = false;
+            playlist_panel_animation = 0.0f;
+            playlist_toggle_animation = 0.0f;
+            playlist_panel_visible = false;
             playlist_toggle_visible = false;
             mouse_over_playlist = false;
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), false);
+            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), 0.0f);
         }
 
         bool sidebar_blocks_mouse =
             mouse_over_playlist ||
             (playlist_toggle_visible &&
-             CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal));
+             CheckCollisionPointRec(mouse, playlist_toggle_bounds));
         bool controls_enabled = has_track && !sidebar_blocks_mouse;
         bool repeat_pressed =
             button_pressed(layout.repeat_button, mouse, controls_enabled);
@@ -1741,7 +1764,7 @@ int main(int argc, char **argv)
 
         float current_title_right = (float)layout.width - layout.title_x;
 
-        if (playlist_open) {
+        if (playlist_panel_visible) {
             current_title_right = layout.playlist_panel.x - layout.title_x;
         }
 
@@ -1769,16 +1792,21 @@ int main(int argc, char **argv)
         }
 
         size_t bar_count = spectrum_bar_count(layout.spectrum, layout.scale);
+        bool spectrum_paused = GetTime() < spectrum_resume_at;
 
         if (has_track && bar_count > 0) {
-            float samples[SPECTRUM_SAMPLE_COUNT];
-            unsigned int sample_rate = 0;
-            size_t copied = player_copy_analysis_samples(
-                &player, samples, SPECTRUM_SAMPLE_COUNT, &sample_rate);
+            if (spectrum_paused) {
+                spectrum_decay(&spectrum, GetFrameTime());
+            } else {
+                float samples[SPECTRUM_SAMPLE_COUNT];
+                unsigned int sample_rate = 0;
+                size_t copied = player_copy_analysis_samples(
+                    &player, samples, SPECTRUM_SAMPLE_COUNT, &sample_rate);
 
-            if (copied == SPECTRUM_SAMPLE_COUNT) {
-                spectrum_update(&spectrum, samples, sample_rate, bar_count,
-                                GetFrameTime());
+                if (copied == SPECTRUM_SAMPLE_COUNT) {
+                    spectrum_update(&spectrum, samples, sample_rate, bar_count,
+                                    GetFrameTime());
+                }
             }
         } else {
             spectrum_reset(&spectrum);
@@ -1839,15 +1867,15 @@ int main(int argc, char **argv)
                         true, shuffle_enabled);
         }
 
-        if (has_track && playlist_open) {
+        if (playlist_panel_visible) {
             draw_playlist_panel(&playlist, &layout, playlist_scroll,
                                 hovered_playlist_track,
                                 playlist_text_started_at);
         }
 
         if (playlist_toggle_visible) {
-            draw_playlist_toggle(layout.playlist_toggle, playlist_open, &icons,
-                                 mouse);
+            draw_playlist_toggle(playlist_toggle_bounds, playlist_open, &icons,
+                                 mouse, playlist_toggle_animation);
         }
 
         EndDrawing();
