@@ -16,6 +16,7 @@ typedef struct {
     Platform platform;
     const char *cc;
     const char *executable;
+    const char *object_dir;
     const char *runner;
 } Build;
 
@@ -39,6 +40,7 @@ static const char *raylib_sources[] = {
     "thirdparty/raylib/src/rshapes.c",
     "thirdparty/raylib/src/rtextures.c",
     "thirdparty/raylib/src/rtext.c",
+    "thirdparty/raylib/src/rglfw.c",
 };
 
 static bool collect_source_file(Walk_Entry entry)
@@ -95,6 +97,7 @@ static Build configure_build(bool wine)
         build.platform = MP_PLATFORM_WINDOWS;
         if (build.cc == NULL) build.cc = "x86_64-w64-mingw32-cc";
         build.executable = "build/mp.exe";
+        build.object_dir = "build/obj/windows";
         build.runner = "wine";
         return build;
     }
@@ -102,12 +105,15 @@ static Build configure_build(bool wine)
 #if defined(_WIN32)
     build.platform = MP_PLATFORM_WINDOWS;
     build.executable = "build/mp.exe";
+    build.object_dir = "build/obj/windows";
 #elif defined(__APPLE__)
     build.platform = MP_PLATFORM_MACOS;
     build.executable = "build/mp";
+    build.object_dir = "build/obj/macos";
 #else
     build.platform = MP_PLATFORM_LINUX;
     build.executable = "build/mp";
+    build.object_dir = "build/obj/linux";
 #endif
 
     return build;
@@ -135,11 +141,9 @@ static void append_platform_options(Cmd *cmd, Platform platform)
     }
 }
 
-static bool build_app(const Build *build)
+static void append_compile_options(Cmd *cmd, Platform platform)
 {
-    Cmd cmd = {0};
-    append_compiler(&cmd, build);
-    cmd_append(&cmd, "-o", build->executable, "-std=c99", "-g", "-Wall",
+    cmd_append(cmd, "-std=c99", "-g", "-Wall",
                "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare",
                "-Wno-format", "-Wno-missing-braces",
                "-Wno-missing-field-initializers", "-fno-strict-aliasing",
@@ -150,25 +154,79 @@ static bool build_app(const Build *build)
                "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
                "thirdparty/miniaudio", "-I", "thirdparty/nanosvg");
 
-    if (build->platform == MP_PLATFORM_LINUX) {
-        cmd_append(&cmd, "-D_GLFW_X11");
-    } else if (build->platform == MP_PLATFORM_WINDOWS) {
-        cmd_append(&cmd, "-DUNICODE");
+    if (platform == MP_PLATFORM_LINUX) {
+        cmd_append(cmd, "-D_GLFW_X11");
+    } else if (platform == MP_PLATFORM_WINDOWS) {
+        cmd_append(cmd, "-DUNICODE");
+    }
+}
+
+static const char *source_object_path(const Build *build, const char *source)
+{
+    return temp_sprintf("%s/%s.o", build->object_dir, path_name(source));
+}
+
+static bool compile_source(const Build *build, const char *source,
+                           const char *object, Procs *procs, size_t jobs)
+{
+    Cmd cmd = {0};
+    append_compiler(&cmd, build);
+    append_compile_options(&cmd, build->platform);
+
+    if (build->platform == MP_PLATFORM_MACOS &&
+        strcmp(source, "thirdparty/raylib/src/rglfw.c") == 0) {
+        cmd_append(&cmd, "-x", "objective-c");
     }
 
-    da_append_many(&cmd, app_sources, ARRAY_LEN(app_sources));
-    da_append_many(&cmd, raylib_sources, ARRAY_LEN(raylib_sources));
-
-    if (build->platform == MP_PLATFORM_MACOS) {
-        cmd_append(&cmd, "-x", "objective-c", "thirdparty/raylib/src/rglfw.c",
-                   "-x", "c");
-    } else {
-        cmd_append(&cmd, "thirdparty/raylib/src/rglfw.c");
-    }
-
-    append_platform_options(&cmd, build->platform);
-    bool result = cmd_run(&cmd);
+    cmd_append(&cmd, "-c", source, "-o", object);
+    bool result = cmd_run(&cmd, .async = procs, .max_procs = jobs);
     cmd_free(cmd);
+    return result;
+}
+
+static bool build_app(const Build *build)
+{
+    if (!mkdir_if_not_exists("build/obj")) return false;
+    if (!mkdir_if_not_exists(build->object_dir)) return false;
+
+    File_Paths objects = {0};
+    Procs procs = {0};
+    int processor_count = nob_nprocs();
+    size_t jobs = processor_count > 0 ? (size_t) processor_count : 1;
+    bool result = true;
+
+    for (size_t i = 0; i < ARRAY_LEN(app_sources); ++i) {
+        const char *object = source_object_path(build, app_sources[i]);
+        da_append(&objects, object);
+        if (!compile_source(build, app_sources[i], object, &procs, jobs)) {
+            result = false;
+            break;
+        }
+    }
+
+    for (size_t i = 0; result && i < ARRAY_LEN(raylib_sources); ++i) {
+        const char *object = source_object_path(build, raylib_sources[i]);
+        da_append(&objects, object);
+        if (!compile_source(build, raylib_sources[i], object, &procs, jobs)) {
+            result = false;
+            break;
+        }
+    }
+
+    if (!procs_flush(&procs)) result = false;
+
+    if (result) {
+        Cmd cmd = {0};
+        append_compiler(&cmd, build);
+        cmd_append(&cmd, "-o", build->executable);
+        da_append_many(&cmd, objects.items, objects.count);
+        append_platform_options(&cmd, build->platform);
+        result = cmd_run(&cmd);
+        cmd_free(cmd);
+    }
+
+    da_free(procs);
+    da_free(objects);
     return result;
 }
 
