@@ -85,8 +85,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           package="mp-${version}-${{ matrix.package }}"
           mkdir -p "dist/${package}"
-          cp build/mp LICENSE README.md "dist/${package}/"
-          cp -R assets "dist/${package}/assets"
+          cp build/mp LICENSE README.md assets/OFL.txt "dist/${package}/"
           tar -czf "dist/${package}.tar.gz" -C dist "${package}"
 
       - name: package
@@ -96,8 +95,7 @@ jobs:
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           $package = "mp-$version-${{ matrix.package }}"
           New-Item -ItemType Directory -Path "dist/$package" | Out-Null
-          Copy-Item build/mp.exe, LICENSE, README.md -Destination "dist/$package"
-          Copy-Item assets -Destination "dist/$package/assets" -Recurse
+          Copy-Item build/mp.exe, LICENSE, README.md, assets/OFL.txt -Destination "dist/$package"
           Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
 
       - name: upload

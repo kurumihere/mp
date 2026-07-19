@@ -20,7 +20,29 @@ typedef struct {
     const char *runner;
 } Build;
 
+typedef struct {
+    const char *path;
+    const char *symbol;
+    const char *name;
+} Asset_Source;
+
+#define GENERATED_ASSETS_SOURCE "build/generated/assets.c"
+
+static const Asset_Source asset_sources[] = {
+    {"assets/back.svg", "back_svg", "back.svg"},
+    {"assets/forward.svg", "forward_svg", "forward.svg"},
+    {"assets/pause.svg", "pause_svg", "pause.svg"},
+    {"assets/play.svg", "play_svg", "play.svg"},
+    {"assets/repeat.svg", "repeat_svg", "repeat.svg"},
+    {"assets/repeat-one.svg", "repeat_one_svg", "repeat-one.svg"},
+    {"assets/shuffle.svg", "shuffle_svg", "shuffle.svg"},
+    {"assets/icon.png", "icon_png", "icon.png"},
+    {"assets/OpenSans-Regular.ttf", "open_sans_regular_ttf",
+     "OpenSans-Regular.ttf"},
+};
+
 static const char *app_sources[] = {
+    GENERATED_ASSETS_SOURCE,
     "src/mp.c",
     "src/svg.c",
     "src/log.c",
@@ -42,6 +64,87 @@ static const char *raylib_sources[] = {
     "thirdparty/raylib/src/rtext.c",
     "thirdparty/raylib/src/rglfw.c",
 };
+
+static bool generate_assets(void)
+{
+    const char *inputs[ARRAY_LEN(asset_sources) + 1];
+    inputs[0] = "nob.c";
+
+    for (size_t i = 0; i < ARRAY_LEN(asset_sources); ++i) {
+        inputs[i + 1] = asset_sources[i].path;
+    }
+
+    int rebuild =
+        needs_rebuild(GENERATED_ASSETS_SOURCE, inputs, ARRAY_LEN(inputs));
+
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return true;
+    if (!mkdir_if_not_exists("build/generated")) return false;
+
+    String_Builder output = {0};
+    sb_append_cstr(&output, "#include \"assets.h\"\n\n");
+
+    for (size_t asset_index = 0; asset_index < ARRAY_LEN(asset_sources);
+         ++asset_index) {
+        const Asset_Source *asset = &asset_sources[asset_index];
+        String_Builder data = {0};
+
+        if (!read_entire_file(asset->path, &data) || data.count == 0) {
+            sb_free(data);
+            sb_free(output);
+            return false;
+        }
+
+        sb_appendf(&output, "static const unsigned char %s_data[] = {\n",
+                   asset->symbol);
+
+        static const char hex[] = "0123456789abcdef";
+
+        for (size_t i = 0; i < data.count; ++i) {
+            if (i % 12 == 0) sb_append_cstr(&output, "    ");
+
+            unsigned char byte = (unsigned char)data.items[i];
+            char encoded[] = {'0', 'x', hex[byte >> 4], hex[byte & 0x0f], ','};
+            sb_append_buf(&output, encoded, sizeof(encoded));
+
+            if (i % 12 == 11 || i + 1 == data.count) {
+                sb_append_cstr(&output, "\n");
+            }
+        }
+
+        sb_append_cstr(&output, "};\n\n");
+        sb_free(data);
+    }
+
+    sb_append_cstr(&output,
+                   "static const Embedded_Asset assets[ASSET_COUNT] = {\n");
+
+    for (size_t i = 0; i < ARRAY_LEN(asset_sources); ++i) {
+        const Asset_Source *asset = &asset_sources[i];
+        sb_appendf(&output, "    {%s_data, sizeof(%s_data), \"%s\"},\n",
+                   asset->symbol, asset->symbol, asset->name);
+    }
+
+    sb_appendf(&output,
+               "};\n\n_Static_assert(ASSET_COUNT == %zu, \"asset list mismatch\");\n\n",
+               ARRAY_LEN(asset_sources));
+    sb_append_cstr(
+        &output,
+        "Embedded_Asset asset_get(Asset_Id id)\n"
+        "{\n"
+        "    if ((int)id < 0 || id >= ASSET_COUNT) return (Embedded_Asset){0};\n"
+        "    return assets[id];\n"
+        "}\n");
+
+    const char *temporary = "build/generated/assets.c.tmp";
+    bool result = write_entire_file(temporary, output.items, output.count) &&
+                  nob_rename(temporary, GENERATED_ASSETS_SOURCE);
+
+    if (!result) delete_file(temporary);
+
+    sb_free(output);
+    return result;
+}
 
 static bool collect_source_file(Walk_Entry entry)
 {
@@ -69,6 +172,7 @@ static int app_needs_rebuild(const Build *build)
     File_Paths inputs = {0};
     da_append(&inputs, "nob.c");
     da_append(&inputs, "thirdparty/nob.h");
+    da_append(&inputs, GENERATED_ASSETS_SOURCE);
 
     for (size_t i = 0; i < ARRAY_LEN(roots); ++i) {
         if (!walk_dir(roots[i], collect_source_file, .data = &inputs)) {
@@ -153,7 +257,7 @@ static void append_compile_options(Cmd *cmd, Platform platform)
                "-DSUPPORT_FILEFORMAT_JPG=1", "-I", "thirdparty/raylib/src",
                "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
                "thirdparty/miniaudio", "-I", "thirdparty/nanosvg", "-I",
-               "thirdparty");
+               "thirdparty", "-I", "src");
 
     if (platform == MP_PLATFORM_LINUX) {
         cmd_append(cmd, "-D_GLFW_X11");
@@ -274,6 +378,7 @@ int main(int argc, char **argv)
 #endif
 
     if (!mkdir_if_not_exists("build")) return 1;
+    if (!generate_assets()) return 1;
 
     Build build = configure_build(wine);
     int rebuild = app_needs_rebuild(&build);

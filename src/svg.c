@@ -1,6 +1,7 @@
 #include "svg.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "log.h"
 
@@ -16,14 +17,27 @@
 #pragma GCC diagnostic pop
 #endif
 
-Texture2D svg_load_texture(const char *path, int size, float content_scale)
+Texture2D svg_load_texture(const char *name, const unsigned char *data,
+                           size_t data_size, int size, float content_scale)
 {
-    if (size <= 0 || content_scale <= 0.0f) return (Texture2D){0};
+    if (data == NULL || data_size == 0 || size <= 0 || content_scale <= 0.0f) {
+        return (Texture2D){0};
+    }
 
-    NSVGimage *svg = nsvgParseFromFile(path, "px", 96.0f);
+    char *source = malloc(data_size + 1);
+
+    if (source == NULL) {
+        mp_log(ERROR, "failed to allocate SVG source: %s", name);
+        return (Texture2D){0};
+    }
+
+    memcpy(source, data, data_size);
+    source[data_size] = '\0';
+    NSVGimage *svg = nsvgParse(source, "px", 96.0f);
+    free(source);
 
     if (svg == NULL || svg->width <= 0.0f || svg->height <= 0.0f) {
-        mp_log(ERROR, "failed to parse SVG: %s", path);
+        mp_log(ERROR, "failed to parse SVG: %s", name);
         nsvgDelete(svg);
         return (Texture2D){0};
     }
@@ -43,7 +57,7 @@ Texture2D svg_load_texture(const char *path, int size, float content_scale)
     unsigned char *pixels = calloc(pixel_count, 4);
 
     if (rasterizer == NULL || pixels == NULL) {
-        mp_log(ERROR, "failed to allocate SVG rasterizer: %s", path);
+        mp_log(ERROR, "failed to allocate SVG rasterizer: %s", name);
         free(pixels);
         nsvgDeleteRasterizer(rasterizer);
         nsvgDelete(svg);
@@ -72,7 +86,7 @@ Texture2D svg_load_texture(const char *path, int size, float content_scale)
     nsvgDelete(svg);
 
     if (!IsTextureValid(texture)) {
-        mp_log(ERROR, "failed to create SVG texture: %s", path);
+        mp_log(ERROR, "failed to create SVG texture: %s", name);
         return (Texture2D){0};
     }
 

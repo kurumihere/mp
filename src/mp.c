@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "assets.h"
 #include "log.h"
 #include "m3u.h"
 #include "metadata.h"
@@ -15,7 +16,6 @@
 #include "spectrum.h"
 #include "svg.h"
 
-#define ASSET_PATH_SIZE 4096
 #define FONT_MIN_SIZE 20
 #define FONT_MAX_SIZE 60
 #define FONT_SIZE_STEP 10
@@ -267,27 +267,19 @@ static void unload_ui_icons(Ui_Icons *icons)
     *icons = (Ui_Icons){0};
 }
 
-static bool make_asset_path(char *path, size_t capacity, const char *directory,
-                            const char *name)
+static bool set_window_icon(void)
 {
-    int written = snprintf(path, capacity, "%s/%s", directory, name);
+    Embedded_Asset asset = asset_get(ASSET_ICON_PNG);
 
-    return written >= 0 && (size_t)written < capacity;
-}
-
-static bool set_window_icon(const char *asset_directory)
-{
-    char path[ASSET_PATH_SIZE];
-
-    if (!make_asset_path(path, sizeof(path), asset_directory, "icon.png")) {
-        mp_log(ERROR, "icon path is too long");
+    if (asset.data == NULL || asset.size > INT_MAX) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
         return false;
     }
 
-    Image icon = LoadImage(path);
+    Image icon = LoadImageFromMemory(".png", asset.data, (int)asset.size);
 
     if (!IsImageValid(icon)) {
-        mp_log(ERROR, "failed to load application icon: %s", path);
+        mp_log(ERROR, "failed to load application icon: %s", asset.name);
         return false;
     }
 
@@ -295,7 +287,7 @@ static bool set_window_icon(const char *asset_directory)
 
     if (!IsImageValid(icon) ||
         icon.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
-        mp_log(ERROR, "failed to convert application icon: %s", path);
+        mp_log(ERROR, "failed to convert application icon: %s", asset.name);
         UnloadImage(icon);
         return false;
     }
@@ -313,13 +305,12 @@ static void unload_fonts(void)
     }
 }
 
-static bool load_fonts(const char *asset_directory)
+static bool load_fonts(void)
 {
-    char path[ASSET_PATH_SIZE];
+    Embedded_Asset asset = asset_get(ASSET_OPEN_SANS_REGULAR_TTF);
 
-    if (!make_asset_path(path, sizeof(path), asset_directory,
-                         "OpenSans-Regular.ttf")) {
-        mp_log(ERROR, "font path is too long");
+    if (asset.data == NULL || asset.size > INT_MAX) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
         return false;
     }
 
@@ -352,12 +343,13 @@ static bool load_fonts(const char *asset_directory)
 
     for (int i = 0; i < FONT_COUNT; ++i) {
         int font_size = FONT_MIN_SIZE + i * FONT_SIZE_STEP;
-        Font font = LoadFontEx(path, font_size, codepoints, codepoint_count);
+        Font font = LoadFontFromMemory(".ttf", asset.data, (int)asset.size,
+                                       font_size, codepoints, codepoint_count);
 
         if (!IsFontValid(font) || !IsTextureValid(font.texture) ||
             font.baseSize != font_size) {
             mp_log(ERROR, "failed to load font at %d px: %s", font_size,
-                   path);
+                   asset.name);
             if (IsFontValid(font)) UnloadFont(font);
             unload_fonts();
             return false;
@@ -393,73 +385,38 @@ static void draw_text(const char *text, int x, int y, int font_size,
                (float)font_size, 0.0f, color);
 }
 
-static bool asset_directory_valid(const char *directory)
+static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
 {
-    char path[ASSET_PATH_SIZE];
+    Embedded_Asset asset = asset_get(id);
 
-    return make_asset_path(path, sizeof(path), directory, "play.svg") &&
-           FileExists(path);
-}
-
-static bool resolve_asset_directory(char *directory, size_t capacity)
-{
-    if (asset_directory_valid("assets")) {
-        int written = snprintf(directory, capacity, "assets");
-        return written >= 0 && (size_t)written < capacity;
-    }
-
-    const char *application_directory = GetApplicationDirectory();
-    const char *relative_directories[] = {"assets", "../assets"};
-
-    for (size_t i = 0;
-         i < sizeof(relative_directories) / sizeof(relative_directories[0]);
-         ++i) {
-        int written = snprintf(directory, capacity, "%s%s",
-                               application_directory, relative_directories[i]);
-
-        if (written >= 0 && (size_t)written < capacity &&
-            asset_directory_valid(directory)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static Texture2D load_asset_texture(const char *directory, const char *name,
-                                    int size, float content_scale)
-{
-    char path[ASSET_PATH_SIZE];
-
-    if (!make_asset_path(path, sizeof(path), directory, name)) {
-        mp_log(ERROR, "asset path is too long: %s", name);
+    if (asset.data == NULL) {
+        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
         return (Texture2D){0};
     }
 
-    return svg_load_texture(path, size, content_scale);
+    return svg_load_texture(asset.name, asset.data, asset.size, size,
+                            content_scale);
 }
 
-static bool create_ui_icons(Ui_Icons *icons, const char *asset_directory)
+static bool create_ui_icons(Ui_Icons *icons)
 {
     *icons = (Ui_Icons){
-        .back = load_asset_texture(asset_directory, "back.svg",
-                                   UI_BUTTON_ICON_SIZE, 0.74f),
-        .forward = load_asset_texture(asset_directory, "forward.svg",
-                                      UI_BUTTON_ICON_SIZE, 0.74f),
-        .pause = load_asset_texture(asset_directory, "pause.svg",
-                                    UI_BUTTON_ICON_SIZE, 0.72f),
-        .play = load_asset_texture(asset_directory, "play.svg",
-                                   UI_BUTTON_ICON_SIZE, 0.72f),
-        .repeat = load_asset_texture(asset_directory, "repeat.svg",
-                                     UI_BUTTON_ICON_SIZE, 0.68f),
-        .repeat_one = load_asset_texture(asset_directory, "repeat-one.svg",
+        .back = load_asset_texture(ASSET_BACK_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
+        .forward =
+            load_asset_texture(ASSET_FORWARD_SVG, UI_BUTTON_ICON_SIZE, 0.74f),
+        .pause =
+            load_asset_texture(ASSET_PAUSE_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
+        .play = load_asset_texture(ASSET_PLAY_SVG, UI_BUTTON_ICON_SIZE, 0.72f),
+        .repeat =
+            load_asset_texture(ASSET_REPEAT_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
+        .repeat_one = load_asset_texture(ASSET_REPEAT_ONE_SVG,
                                          UI_BUTTON_ICON_SIZE, 0.68f),
-        .shuffle = load_asset_texture(asset_directory, "shuffle.svg",
-                                      UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist_back = load_asset_texture(asset_directory, "back.svg",
-                                            UI_TOGGLE_ICON_SIZE, 0.88f),
-        .playlist_forward = load_asset_texture(asset_directory, "forward.svg",
-                                               UI_TOGGLE_ICON_SIZE, 0.88f),
+        .shuffle =
+            load_asset_texture(ASSET_SHUFFLE_SVG, UI_BUTTON_ICON_SIZE, 0.68f),
+        .playlist_back =
+            load_asset_texture(ASSET_BACK_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
+        .playlist_forward =
+            load_asset_texture(ASSET_FORWARD_SVG, UI_TOGGLE_ICON_SIZE, 0.88f),
     };
 
     Texture2D textures[] = {
@@ -1238,10 +1195,8 @@ int main(int argc, char **argv)
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_title);
 
     Ui_Icons icons = {0};
-    char asset_directory[ASSET_PATH_SIZE];
 
-    if (!resolve_asset_directory(asset_directory, sizeof(asset_directory))) {
-        mp_log(ERROR, "failed to locate application assets");
+    if (!set_window_icon()) {
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1249,7 +1204,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!set_window_icon(asset_directory)) {
+    if (!load_fonts()) {
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1257,15 +1212,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!load_fonts(asset_directory)) {
-        CloseWindow();
-        playlist_uninit(&playlist);
-        playback_order_uninit(&playback_order);
-        player_uninit(&player);
-        return 1;
-    }
-
-    if (!create_ui_icons(&icons, asset_directory)) {
+    if (!create_ui_icons(&icons)) {
         unload_fonts();
         CloseWindow();
         playlist_uninit(&playlist);
