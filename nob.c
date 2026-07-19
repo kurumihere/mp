@@ -7,9 +7,9 @@
 #include "thirdparty/nob.h"
 
 typedef enum {
-    PLATFORM_LINUX,
-    PLATFORM_WINDOWS,
-    PLATFORM_MACOS,
+    MP_PLATFORM_LINUX,
+    MP_PLATFORM_WINDOWS,
+    MP_PLATFORM_MACOS,
 } Platform;
 
 typedef struct {
@@ -92,7 +92,7 @@ static Build configure_build(bool wine)
     build.cc = environment_tool("CC");
 
     if (wine) {
-        build.platform = PLATFORM_WINDOWS;
+        build.platform = MP_PLATFORM_WINDOWS;
         if (build.cc == NULL) build.cc = "x86_64-w64-mingw32-cc";
         build.executable = "build/mp.exe";
         build.runner = "wine";
@@ -100,13 +100,13 @@ static Build configure_build(bool wine)
     }
 
 #if defined(_WIN32)
-    build.platform = PLATFORM_WINDOWS;
+    build.platform = MP_PLATFORM_WINDOWS;
     build.executable = "build/mp.exe";
 #elif defined(__APPLE__)
-    build.platform = PLATFORM_MACOS;
+    build.platform = MP_PLATFORM_MACOS;
     build.executable = "build/mp";
 #else
-    build.platform = PLATFORM_LINUX;
+    build.platform = MP_PLATFORM_LINUX;
     build.executable = "build/mp";
 #endif
 
@@ -124,9 +124,9 @@ static void append_compiler(Cmd *cmd, const Build *build)
 
 static void append_platform_options(Cmd *cmd, Platform platform)
 {
-    if (platform == PLATFORM_WINDOWS) {
+    if (platform == MP_PLATFORM_WINDOWS) {
         cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32");
-    } else if (platform == PLATFORM_MACOS) {
+    } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
                    "-framework", "CoreVideo");
@@ -150,16 +150,16 @@ static bool build_app(const Build *build)
                "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
                "thirdparty/miniaudio", "-I", "thirdparty/nanosvg");
 
-    if (build->platform == PLATFORM_LINUX) {
+    if (build->platform == MP_PLATFORM_LINUX) {
         cmd_append(&cmd, "-D_GLFW_X11");
-    } else if (build->platform == PLATFORM_WINDOWS) {
+    } else if (build->platform == MP_PLATFORM_WINDOWS) {
         cmd_append(&cmd, "-DUNICODE");
     }
 
     da_append_many(&cmd, app_sources, ARRAY_LEN(app_sources));
     da_append_many(&cmd, raylib_sources, ARRAY_LEN(raylib_sources));
 
-    if (build->platform == PLATFORM_MACOS) {
+    if (build->platform == MP_PLATFORM_MACOS) {
         cmd_append(&cmd, "-x", "objective-c", "thirdparty/raylib/src/rglfw.c",
                    "-x", "c");
     } else {
