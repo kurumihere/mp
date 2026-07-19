@@ -16,13 +16,16 @@
 #include "svg.h"
 
 #define ASSET_PATH_SIZE 4096
-#define DEFAULT_FONT_BASE_SIZE 96
+#define FONT_MIN_SIZE 20
+#define FONT_MAX_SIZE 60
+#define FONT_SIZE_STEP 10
+#define FONT_COUNT ((FONT_MAX_SIZE - FONT_MIN_SIZE) / FONT_SIZE_STEP + 1)
 #define MP_VERSION "0.1.1"
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
 
-static Font default_font;
+static Font fonts[FONT_COUNT];
 
 #if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
 #error Player analysis and spectrum sample counts must match
@@ -294,7 +297,15 @@ static bool set_window_icon(const char *asset_directory)
     return true;
 }
 
-static bool load_default_font(const char *asset_directory)
+static void unload_fonts(void)
+{
+    for (int i = 0; i < FONT_COUNT; ++i) {
+        if (IsFontValid(fonts[i])) UnloadFont(fonts[i]);
+        fonts[i] = (Font){0};
+    }
+}
+
+static bool load_fonts(const char *asset_directory)
 {
     char path[ASSET_PATH_SIZE];
 
@@ -331,31 +342,46 @@ static bool load_default_font(const char *asset_directory)
         }
     }
 
-    Font font =
-        LoadFontEx(path, DEFAULT_FONT_BASE_SIZE, codepoints, codepoint_count);
+    for (int i = 0; i < FONT_COUNT; ++i) {
+        int font_size = FONT_MIN_SIZE + i * FONT_SIZE_STEP;
+        Font font = LoadFontEx(path, font_size, codepoints, codepoint_count);
 
-    if (!IsFontValid(font) || !IsTextureValid(font.texture) ||
-        font.baseSize != DEFAULT_FONT_BASE_SIZE) {
-        mp_log(ERROR, "failed to load font: %s", path);
-        return false;
+        if (!IsFontValid(font) || !IsTextureValid(font.texture) ||
+            font.baseSize != font_size) {
+            mp_log(ERROR, "failed to load font at %d px: %s", font_size,
+                   path);
+            if (IsFontValid(font)) UnloadFont(font);
+            unload_fonts();
+            return false;
+        }
+
+        SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
+        fonts[i] = font;
     }
 
-    GenTextureMipmaps(&font.texture);
-    SetTextureFilter(font.texture, TEXTURE_FILTER_TRILINEAR);
-    default_font = font;
     return true;
+}
+
+static Font font_for_size(int font_size)
+{
+    int index = (font_size - FONT_MIN_SIZE) / FONT_SIZE_STEP;
+
+    if (index < 0) index = 0;
+    if (index >= FONT_COUNT) index = FONT_COUNT - 1;
+
+    return fonts[index];
 }
 
 static int measure_text(const char *text, int font_size)
 {
-    return (int)roundf(
-        MeasureTextEx(default_font, text, (float)font_size, 0.0f).x);
+    Font font = font_for_size(font_size);
+    return (int)roundf(MeasureTextEx(font, text, (float)font_size, 0.0f).x);
 }
 
 static void draw_text(const char *text, int x, int y, int font_size,
                       Color color)
 {
-    DrawTextEx(default_font, text, (Vector2){(float)x, (float)y},
+    DrawTextEx(font_for_size(font_size), text, (Vector2){(float)x, (float)y},
                (float)font_size, 0.0f, color);
 }
 
@@ -1227,7 +1253,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!load_default_font(asset_directory)) {
+    if (!load_fonts(asset_directory)) {
         CloseWindow();
         playlist_uninit(&playlist);
         playback_order_uninit(&playback_order);
@@ -1844,7 +1870,7 @@ int main(int argc, char **argv)
 
     album_art_clear(&album_art);
     unload_ui_icons(&icons);
-    UnloadFont(default_font);
+    unload_fonts();
     CloseWindow();
 
     playlist_uninit(&playlist);
