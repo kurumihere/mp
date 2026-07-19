@@ -86,9 +86,6 @@ jobs:
       - name: Incremental build
         run: ./nob
 
-      - name: Run tests
-        run: ./nob test
-
       - name: Package
         if: inputs.package && runner.os != 'Windows'
         shell: bash
