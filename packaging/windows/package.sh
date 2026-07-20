@@ -51,7 +51,7 @@ if [[ -z $iscc ]]; then
   iscc='/c/Program Files (x86)/Inno Setup 6/ISCC.exe'
 fi
 
-"$iscc" \
+MSYS2_ARG_CONV_EXCL='*' "$iscc" \
   "/DAppVersion=$version" \
   "/DSourceDir=$(cygpath -w "$package_dir")" \
   "/DOutputDir=$(cygpath -w "$repo_root/dist")" \
