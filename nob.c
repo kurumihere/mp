@@ -47,8 +47,8 @@ static const Asset_Source asset_sources[] = {
      "settings-black.svg"},
     {"assets/icons/black/shuffle-black.svg", "shuffle_black_svg",
      "shuffle-black.svg"},
-    {"assets/icons/playlist-dark.svg", "playlist_dark_svg",
-     "playlist-dark.svg"},
+    {"assets/icons/black/playlist-black.svg", "playlist_black_svg",
+     "playlist-black.svg"},
     {"assets/icons/white/back-white.svg", "back_white_svg",
      "back-white.svg"},
     {"assets/icons/white/forward-white.svg", "forward_white_svg",
@@ -65,22 +65,26 @@ static const Asset_Source asset_sources[] = {
      "settings-white.svg"},
     {"assets/icons/white/shuffle-white.svg", "shuffle_white_svg",
      "shuffle-white.svg"},
-    {"assets/icons/playlist-light.svg", "playlist_light_svg",
-     "playlist-light.svg"},
+    {"assets/icons/white/playlist-white.svg", "playlist_white_svg",
+     "playlist-white.svg"},
     {"assets/icon.png", "icon_png", "icon.png"},
-    {"assets/fonts/OpenSans-Regular.ttf", "open_sans_regular_ttf",
-     "OpenSans-Regular.ttf"},
+    {"assets/fonts/NotoSans.ttf", "noto_sans_ttf", "NotoSans.ttf"},
+    {"assets/fonts/NotoSansJP.ttf", "noto_sans_jp_ttf", "NotoSansJP.ttf"},
+    {"assets/fonts/NotoSansKR.ttf", "noto_sans_kr_ttf", "NotoSansKR.ttf"},
+    {"assets/fonts/NotoSansTC.ttf", "noto_sans_tc_ttf", "NotoSansTC.ttf"},
 };
 
 static const char *app_sources[] = {
     GENERATED_ASSETS_SOURCE,
     "src/mp.c",
+    "src/font_renderer.c",
     "src/config.c",
     "src/svg.c",
     "src/log.c",
     "src/player.c",
     "src/playback_order.c",
     "src/playlist.c",
+    "src/playlist_search.c",
     "src/m3u.c",
     "src/session.c",
     "src/metadata.c",
@@ -88,6 +92,7 @@ static const char *app_sources[] = {
     "src/theme.c",
     "thirdparty/miniaudio/miniaudio.c",
     "thirdparty/nanosvg/nanosvg.c",
+    "thirdparty/tinyfiledialogs/tinyfiledialogs.c",
 };
 
 static const char *raylib_sources[] = {
@@ -270,7 +275,7 @@ static void append_platform_options(Cmd *cmd, Platform platform)
 {
     if (platform == MP_PLATFORM_WINDOWS) {
         cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32",
-                   "-ladvapi32");
+                   "-ladvapi32", "-lcomdlg32", "-lole32");
     } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
@@ -334,11 +339,14 @@ static int non_space(int character)
     return !isspace((unsigned char)character);
 }
 
-static bool pkg_config_arguments(const char *option, const char *output_path,
+static bool pkg_config_arguments(const char *option, const char *package,
+                                 const char *output_path,
                                  File_Paths *arguments)
 {
     Cmd cmd = {0};
-    cmd_append(&cmd, "pkg-config", option, "gio-2.0");
+    const char *pkg_config = environment_tool("PKG_CONFIG");
+    cmd_append(&cmd, pkg_config == NULL ? "pkg-config" : pkg_config, option,
+               package);
 
     if (!cmd_run(&cmd, .stdout_path = output_path)) {
         cmd_free(cmd);
@@ -383,9 +391,20 @@ static bool build_app(const Build *build)
     bool result = true;
 
     if (build->platform == MP_PLATFORM_LINUX) {
-        result = pkg_config_arguments("--cflags", "build/gio-cflags.txt",
+        result =
+            pkg_config_arguments("--cflags", "gio-2.0",
+                                 "build/gio-cflags.txt",
+                                 &platform_compile_options) &&
+            pkg_config_arguments("--libs", "gio-2.0", "build/gio-libs.txt",
+                                 &platform_link_options);
+    }
+
+    if (result) {
+        result = pkg_config_arguments("--cflags", "freetype2",
+                                      "build/freetype-cflags.txt",
                                       &platform_compile_options) &&
-                 pkg_config_arguments("--libs", "build/gio-libs.txt",
+                 pkg_config_arguments("--libs", "freetype2",
+                                      "build/freetype-libs.txt",
                                       &platform_link_options);
     }
 
