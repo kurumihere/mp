@@ -75,11 +75,12 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-freetype
+            mingw-w64-ucrt-x86_64-glib2
             mingw-w64-ucrt-x86_64-pkgconf
 
       - name: install macos dependencies
         if: runner.os == 'macOS'
-        run: brew install freetype pkgconf
+        run: brew install freetype glib pkgconf
 
       - name: bootstrap
         run: cc -std=c99 -o nob nob.c

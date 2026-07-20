@@ -391,14 +391,15 @@ static bool build_app(const Build *build)
     size_t jobs = processor_count > 0 ? (size_t) processor_count : 1;
     bool result = true;
 
-    if (build->platform == MP_PLATFORM_LINUX) {
-        result =
-            pkg_config_arguments("--cflags", "gio-2.0",
-                                 "build/gio-cflags.txt",
-                                 &platform_compile_options) &&
-            pkg_config_arguments("--libs", "gio-2.0", "build/gio-libs.txt",
-                                 &platform_link_options);
-    }
+    const char *glib_package = build->platform == MP_PLATFORM_LINUX
+                                   ? "gio-2.0"
+                                   : "glib-2.0";
+    result = pkg_config_arguments("--cflags", glib_package,
+                                  "build/glib-cflags.txt",
+                                  &platform_compile_options) &&
+             pkg_config_arguments("--libs", glib_package,
+                                  "build/glib-libs.txt",
+                                  &platform_link_options);
 
     if (result) {
         result = pkg_config_arguments("--cflags", "freetype2",
