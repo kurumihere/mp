@@ -6,6 +6,8 @@
 #define NOB_IMPLEMENTATION
 #include "thirdparty/nob.h"
 
+#include <ctype.h>
+
 typedef enum {
     MP_PLATFORM_LINUX,
     MP_PLATFORM_WINDOWS,
@@ -29,32 +31,69 @@ typedef struct {
 #define GENERATED_ASSETS_SOURCE "build/generated/assets.c"
 
 static const Asset_Source asset_sources[] = {
-    {"assets/back.svg", "back_svg", "back.svg"},
-    {"assets/forward.svg", "forward_svg", "forward.svg"},
-    {"assets/pause.svg", "pause_svg", "pause.svg"},
-    {"assets/play.svg", "play_svg", "play.svg"},
-    {"assets/repeat.svg", "repeat_svg", "repeat.svg"},
-    {"assets/repeat-one.svg", "repeat_one_svg", "repeat-one.svg"},
-    {"assets/shuffle.svg", "shuffle_svg", "shuffle.svg"},
+    {"assets/icons/black/back-black.svg", "back_black_svg",
+     "back-black.svg"},
+    {"assets/icons/black/forward-black.svg", "forward_black_svg",
+     "forward-black.svg"},
+    {"assets/icons/black/pause-black.svg", "pause_black_svg",
+     "pause-black.svg"},
+    {"assets/icons/black/play-black.svg", "play_black_svg",
+     "play-black.svg"},
+    {"assets/icons/black/repeat-black.svg", "repeat_black_svg",
+     "repeat-black.svg"},
+    {"assets/icons/black/repeat-one-black.svg", "repeat_one_black_svg",
+     "repeat-one-black.svg"},
+    {"assets/icons/black/settings-black.svg", "settings_black_svg",
+     "settings-black.svg"},
+    {"assets/icons/black/shuffle-black.svg", "shuffle_black_svg",
+     "shuffle-black.svg"},
+    {"assets/icons/black/playlist-black.svg", "playlist_black_svg",
+     "playlist-black.svg"},
+    {"assets/icons/white/back-white.svg", "back_white_svg",
+     "back-white.svg"},
+    {"assets/icons/white/forward-white.svg", "forward_white_svg",
+     "forward-white.svg"},
+    {"assets/icons/white/pause-white.svg", "pause_white_svg",
+     "pause-white.svg"},
+    {"assets/icons/white/play-white.svg", "play_white_svg",
+     "play-white.svg"},
+    {"assets/icons/white/repeat-white.svg", "repeat_white_svg",
+     "repeat-white.svg"},
+    {"assets/icons/white/repeat-one-white.svg", "repeat_one_white_svg",
+     "repeat-one-white.svg"},
+    {"assets/icons/white/settings-white.svg", "settings_white_svg",
+     "settings-white.svg"},
+    {"assets/icons/white/shuffle-white.svg", "shuffle_white_svg",
+     "shuffle-white.svg"},
+    {"assets/icons/white/playlist-white.svg", "playlist_white_svg",
+     "playlist-white.svg"},
     {"assets/icon.png", "icon_png", "icon.png"},
-    {"assets/OpenSans-Regular.ttf", "open_sans_regular_ttf",
-     "OpenSans-Regular.ttf"},
+    {"assets/fonts/NotoSans.ttf", "noto_sans_ttf", "NotoSans.ttf"},
+    {"assets/fonts/NotoSansJP.ttf", "noto_sans_jp_ttf", "NotoSansJP.ttf"},
+    {"assets/fonts/NotoSansKR.ttf", "noto_sans_kr_ttf", "NotoSansKR.ttf"},
+    {"assets/fonts/NotoSansTC.ttf", "noto_sans_tc_ttf", "NotoSansTC.ttf"},
 };
 
 static const char *app_sources[] = {
     GENERATED_ASSETS_SOURCE,
     "src/mp.c",
+    "src/font_renderer.c",
+    "src/config.c",
     "src/svg.c",
     "src/log.c",
     "src/player.c",
     "src/playback_order.c",
     "src/playlist.c",
+    "src/playlist_search.c",
+    "src/worker_thread.c",
     "src/m3u.c",
     "src/session.c",
     "src/metadata.c",
     "src/spectrum.c",
+    "src/theme.c",
     "thirdparty/miniaudio/miniaudio.c",
     "thirdparty/nanosvg/nanosvg.c",
+    "thirdparty/tinyfiledialogs/tinyfiledialogs.c",
 };
 
 static const char *raylib_sources[] = {
@@ -236,11 +275,13 @@ static void append_compiler(Cmd *cmd, const Build *build)
 static void append_platform_options(Cmd *cmd, Platform platform)
 {
     if (platform == MP_PLATFORM_WINDOWS) {
-        cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32");
+        cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32",
+                   "-ladvapi32", "-lcomdlg32", "-lole32");
     } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
-                   "-framework", "CoreVideo");
+                   "-framework", "CoreVideo", "-framework",
+                   "CoreFoundation");
     } else {
         cmd_append(cmd, "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11");
     }
@@ -273,11 +314,15 @@ static const char *source_object_path(const Build *build, const char *source)
 }
 
 static bool compile_source(const Build *build, const char *source,
-                           const char *object, Procs *procs, size_t jobs)
+                           const char *object,
+                           const File_Paths *platform_compile_options,
+                           Procs *procs, size_t jobs)
 {
     Cmd cmd = {0};
     append_compiler(&cmd, build);
     append_compile_options(&cmd, build->platform);
+    da_append_many(&cmd, platform_compile_options->items,
+                   platform_compile_options->count);
 
     if (build->platform == MP_PLATFORM_MACOS &&
         strcmp(source, "thirdparty/raylib/src/rglfw.c") == 0) {
@@ -290,21 +335,86 @@ static bool compile_source(const Build *build, const char *source,
     return result;
 }
 
+static int non_space(int character)
+{
+    return !isspace((unsigned char)character);
+}
+
+static bool pkg_config_arguments(const char *option, const char *package,
+                                 const char *output_path,
+                                 File_Paths *arguments)
+{
+    Cmd cmd = {0};
+    const char *pkg_config = environment_tool("PKG_CONFIG");
+    cmd_append(&cmd, pkg_config == NULL ? "pkg-config" : pkg_config, option,
+               package);
+
+    if (!cmd_run(&cmd, .stdout_path = output_path)) {
+        cmd_free(cmd);
+        return false;
+    }
+
+    cmd_free(cmd);
+
+    String_Builder output = {0};
+
+    if (!read_entire_file(output_path, &output)) {
+        sb_free(output);
+        return false;
+    }
+
+    String_View remaining = sb_to_sv(output);
+
+    while (remaining.count > 0) {
+        remaining = sv_trim_left(remaining);
+
+        if (remaining.count == 0) break;
+
+        String_View argument = sv_chop_while(&remaining, non_space);
+        da_append(arguments, temp_sv_to_cstr(argument));
+    }
+
+    sb_free(output);
+    return true;
+}
+
 static bool build_app(const Build *build)
 {
     if (!mkdir_if_not_exists("build/obj")) return false;
     if (!mkdir_if_not_exists(build->object_dir)) return false;
 
     File_Paths objects = {0};
+    File_Paths platform_compile_options = {0};
+    File_Paths platform_link_options = {0};
     Procs procs = {0};
     int processor_count = nob_nprocs();
     size_t jobs = processor_count > 0 ? (size_t) processor_count : 1;
     bool result = true;
 
-    for (size_t i = 0; i < ARRAY_LEN(app_sources); ++i) {
+    const char *glib_package = build->platform == MP_PLATFORM_LINUX
+                                   ? "gio-2.0"
+                                   : "glib-2.0";
+    result = pkg_config_arguments("--cflags", glib_package,
+                                  "build/glib-cflags.txt",
+                                  &platform_compile_options) &&
+             pkg_config_arguments("--libs", glib_package,
+                                  "build/glib-libs.txt",
+                                  &platform_link_options);
+
+    if (result) {
+        result = pkg_config_arguments("--cflags", "freetype2",
+                                      "build/freetype-cflags.txt",
+                                      &platform_compile_options) &&
+                 pkg_config_arguments("--libs", "freetype2",
+                                      "build/freetype-libs.txt",
+                                      &platform_link_options);
+    }
+
+    for (size_t i = 0; result && i < ARRAY_LEN(app_sources); ++i) {
         const char *object = source_object_path(build, app_sources[i]);
         da_append(&objects, object);
-        if (!compile_source(build, app_sources[i], object, &procs, jobs)) {
+        if (!compile_source(build, app_sources[i], object,
+                            &platform_compile_options, &procs, jobs)) {
             result = false;
             break;
         }
@@ -313,7 +423,8 @@ static bool build_app(const Build *build)
     for (size_t i = 0; result && i < ARRAY_LEN(raylib_sources); ++i) {
         const char *object = source_object_path(build, raylib_sources[i]);
         da_append(&objects, object);
-        if (!compile_source(build, raylib_sources[i], object, &procs, jobs)) {
+        if (!compile_source(build, raylib_sources[i], object,
+                            &platform_compile_options, &procs, jobs)) {
             result = false;
             break;
         }
@@ -326,6 +437,8 @@ static bool build_app(const Build *build)
         append_compiler(&cmd, build);
         cmd_append(&cmd, "-o", build->executable);
         da_append_many(&cmd, objects.items, objects.count);
+        da_append_many(&cmd, platform_link_options.items,
+                       platform_link_options.count);
         append_platform_options(&cmd, build->platform);
         result = cmd_run(&cmd);
         cmd_free(cmd);
@@ -333,6 +446,8 @@ static bool build_app(const Build *build)
 
     da_free(procs);
     da_free(objects);
+    da_free(platform_compile_options);
+    da_free(platform_link_options);
     return result;
 }
 

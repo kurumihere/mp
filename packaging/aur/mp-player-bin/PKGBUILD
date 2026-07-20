@@ -11,6 +11,7 @@ depends=(
   'alsa-lib'
   'desktop-file-utils'
   'glibc'
+  'glib2'
   'libglvnd'
   'libx11'
   'libxcursor'
