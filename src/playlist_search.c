@@ -1,5 +1,6 @@
 #include "playlist_search.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 

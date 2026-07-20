@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
 
 #include "assets.h"
 #include "config.h"
@@ -23,6 +22,7 @@
 #include "svg.h"
 #include "theme.h"
 #include "tinyfiledialogs/tinyfiledialogs.h"
+#include "worker_thread.h"
 
 #define AUDIO_FILE_EXTENSIONS ".flac;.mp3;.wav"
 #define CONFIG_PATH_SIZE 4096
@@ -381,7 +381,7 @@ typedef enum {
 } File_Picker_State;
 
 typedef struct {
-    thrd_t thread;
+    Worker_Thread thread;
     atomic_int state;
     File_Picker_Mode mode;
     char *selection;
@@ -470,7 +470,7 @@ static bool file_picker_start(File_Picker *picker, File_Picker_Mode mode)
     atomic_store_explicit(&picker->state, FILE_PICKER_RUNNING,
                           memory_order_release);
 
-    if (thrd_create(&picker->thread, file_picker_run, picker) != thrd_success) {
+    if (!worker_thread_start(&picker->thread, file_picker_run, picker)) {
         atomic_store_explicit(&picker->state, FILE_PICKER_IDLE,
                               memory_order_release);
         picker->mode = FILE_PICKER_NONE;
@@ -495,7 +495,7 @@ static bool file_picker_take(File_Picker *picker, char **selection,
         return false;
     }
 
-    thrd_join(picker->thread, NULL);
+    worker_thread_join(&picker->thread);
     *selection = picker->selection;
     *mode = picker->mode;
     *graphical = picker->graphical;
@@ -511,7 +511,7 @@ static void file_picker_uninit(File_Picker *picker)
 {
     if (atomic_load_explicit(&picker->state, memory_order_acquire) !=
         FILE_PICKER_IDLE) {
-        thrd_join(picker->thread, NULL);
+        worker_thread_join(&picker->thread);
     }
 
     free(picker->selection);

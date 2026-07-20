@@ -85,6 +85,7 @@ static const char *app_sources[] = {
     "src/playback_order.c",
     "src/playlist.c",
     "src/playlist_search.c",
+    "src/worker_thread.c",
     "src/m3u.c",
     "src/session.c",
     "src/metadata.c",
