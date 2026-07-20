@@ -1,5 +1,8 @@
 #include "player.h"
 
+#include <stdlib.h>
+
+#include "fs.h"
 #include "log.h"
 
 static ma_uint32 atomic_uint32_load(const ma_atomic_uint32 *value)
@@ -99,9 +102,21 @@ bool player_load(Player *player, const char *path)
     int next_sound =
         had_sound ? 1 - player->active_sound : player->active_sound;
 
-    ma_result result =
-        ma_sound_init_from_file(&player->engine, path, MA_SOUND_FLAG_STREAM,
-                                NULL, NULL, &player->sounds[next_sound]);
+    ma_result result;
+
+#ifdef _WIN32
+    wchar_t *wide_path = fs_utf8_to_utf16(path);
+    result = wide_path == NULL
+                 ? MA_INVALID_FILE
+                 : ma_sound_init_from_file_w(
+                       &player->engine, wide_path, MA_SOUND_FLAG_STREAM, NULL,
+                       NULL, &player->sounds[next_sound]);
+    free(wide_path);
+#else
+    result = ma_sound_init_from_file(&player->engine, path,
+                                     MA_SOUND_FLAG_STREAM, NULL, NULL,
+                                     &player->sounds[next_sound]);
+#endif
 
     if (result != MA_SUCCESS) {
         mp_log(ERROR, "failed to load \"%s\": %s", path,

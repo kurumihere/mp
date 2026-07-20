@@ -77,6 +77,7 @@ static const Asset_Source asset_sources[] = {
 static const char *app_sources[] = {
     GENERATED_ASSETS_SOURCE,
     "src/mp.c",
+    "src/fs.c",
     "src/font_renderer.c",
     "src/config.c",
     "src/svg.c",
@@ -275,8 +276,8 @@ static void append_compiler(Cmd *cmd, const Build *build)
 static void append_platform_options(Cmd *cmd, Platform platform)
 {
     if (platform == MP_PLATFORM_WINDOWS) {
-        cmd_append(cmd, "-lopengl32", "-lgdi32", "-lwinmm", "-lshell32",
-                   "-ladvapi32", "-lcomdlg32", "-lole32");
+        cmd_append(cmd, "-mwindows", "-lopengl32", "-lgdi32", "-lwinmm",
+                   "-lshell32", "-ladvapi32", "-lcomdlg32", "-lole32");
     } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
@@ -304,7 +305,7 @@ static void append_compile_options(Cmd *cmd, Platform platform)
     if (platform == MP_PLATFORM_LINUX) {
         cmd_append(cmd, "-D_GLFW_X11");
     } else if (platform == MP_PLATFORM_WINDOWS) {
-        cmd_append(cmd, "-DUNICODE");
+        cmd_append(cmd, "-DUNICODE", "-D_UNICODE");
     }
 }
 

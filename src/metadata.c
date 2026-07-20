@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fs.h"
+
 #define MAX_METADATA_BLOCK (16u * 1024u * 1024u)
 
 static uint32_t read_u24_be(const unsigned char *data)
@@ -713,7 +715,7 @@ void metadata_load(const char *path, Track_Metadata *metadata)
 {
     *metadata = (Track_Metadata){0};
 
-    FILE *file = fopen(path, "rb");
+    FILE *file = fs_fopen(path, "rb");
 
     if (file != NULL) {
         unsigned char signature[12] = {0};
@@ -742,7 +744,7 @@ bool metadata_cover_load(const char *path, Track_Cover *cover)
 {
     *cover = (Track_Cover){0};
 
-    FILE *file = fopen(path, "rb");
+    FILE *file = fs_fopen(path, "rb");
 
     if (file == NULL) return false;
 

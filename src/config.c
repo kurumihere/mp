@@ -6,47 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
-#ifdef _WIN32
-#include <direct.h>
-#endif
-
+#include "fs.h"
 #include "log.h"
 
 #define CONFIG_LINE_SIZE 1024
-
-static bool make_parent_directories(const char *path)
-{
-    size_t length = strlen(path) + 1;
-    char *copy = malloc(length);
-
-    if (copy == NULL) return false;
-
-    memcpy(copy, path, length);
-
-    for (char *character = copy + 1; *character != '\0'; ++character) {
-        if (*character != '/') continue;
-
-        *character = '\0';
-
-#ifdef _WIN32
-        int result = _mkdir(copy);
-#else
-        int result = mkdir(copy, 0700);
-#endif
-
-        if (result != 0 && errno != EEXIST) {
-            free(copy);
-            return false;
-        }
-
-        *character = '/';
-    }
-
-    free(copy);
-    return true;
-}
 
 static char *trim(char *text)
 {
@@ -69,34 +33,37 @@ void app_config_defaults(App_Config *config)
 
 bool app_config_default_path(char *path, size_t capacity)
 {
-    const char *config_home = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
-    int written;
+    char *config_home = fs_environment("XDG_CONFIG_HOME");
+    char *home = fs_environment("HOME");
+    int written = -1;
 
-    if (config_home != NULL && config_home[0] != '\0') {
+    if (config_home != NULL) {
         written = snprintf(path, capacity, "%s/mp/config.toml", config_home);
-    } else if (home != NULL && home[0] != '\0') {
+    } else if (home != NULL) {
         written =
             snprintf(path, capacity, "%s/.config/mp/config.toml", home);
 #ifdef _WIN32
     } else {
-        const char *app_data = getenv("APPDATA");
+        char *app_data = fs_environment("APPDATA");
 
-        if (app_data == NULL || app_data[0] == '\0') return false;
-
-        written = snprintf(path, capacity, "%s/mp/config.toml", app_data);
+        if (app_data != NULL) {
+            written = snprintf(path, capacity, "%s/mp/config.toml", app_data);
+        }
+        free(app_data);
 #else
     } else {
-        return false;
+        written = -1;
 #endif
     }
 
+    free(home);
+    free(config_home);
     return written >= 0 && (size_t)written < capacity;
 }
 
 App_Config_Load_Result app_config_load(const char *path, App_Config *config)
 {
-    FILE *file = fopen(path, "r");
+    FILE *file = fs_fopen(path, "r");
 
     if (file == NULL) {
         if (errno == ENOENT) return APP_CONFIG_LOAD_NOT_FOUND;
@@ -165,7 +132,7 @@ App_Config_Load_Result app_config_load(const char *path, App_Config *config)
 
 bool app_config_save(const char *path, const App_Config *config)
 {
-    if (!make_parent_directories(path)) {
+    if (!fs_make_parent_directories(path)) {
         mp_log(ERROR, "failed to prepare config path: %s", path);
         return false;
     }
@@ -181,7 +148,7 @@ bool app_config_save(const char *path, const App_Config *config)
     memcpy(temporary, path, path_length);
     memcpy(temporary + path_length, ".tmp", sizeof(".tmp"));
 
-    FILE *file = fopen(temporary, "w");
+    FILE *file = fs_fopen(temporary, "w");
     bool success = file != NULL;
 
     if (success) {
@@ -191,10 +158,10 @@ bool app_config_save(const char *path, const App_Config *config)
         if (fclose(file) != 0) success = false;
     }
 
-    if (success && rename(temporary, path) != 0) success = false;
+    if (success && fs_rename(temporary, path) != 0) success = false;
 
     if (!success) {
-        remove(temporary);
+        fs_remove(temporary);
         mp_log(ERROR, "failed to save config: %s", path);
     }
 

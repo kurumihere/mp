@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
+#include "fs.h"
 #include "log.h"
 
 #define MAX_M3U_LINE ((size_t)1024 * 1024)
@@ -33,7 +33,8 @@ static char *join_path(const char *directory, const char *path)
     size_t directory_length = strlen(directory);
     size_t path_length = strlen(path);
     bool needs_separator =
-        directory_length > 0 && directory[directory_length - 1] != '/';
+        directory_length > 0 && directory[directory_length - 1] != '/' &&
+        directory[directory_length - 1] != '\\';
 
     if (directory_length > SIZE_MAX - path_length - 2) return NULL;
 
@@ -54,50 +55,21 @@ static char *join_path(const char *directory, const char *path)
     return joined;
 }
 
-static char *current_directory(void)
-{
-    size_t capacity = 256;
-
-    while (capacity <= MAX_M3U_LINE) {
-        char *directory = malloc(capacity);
-
-        if (directory == NULL) return NULL;
-
-        if (getcwd(directory, capacity) != NULL) return directory;
-
-        int error = errno;
-        free(directory);
-
-        if (error != ERANGE) return NULL;
-
-        capacity *= 2;
-    }
-
-    return NULL;
-}
-
-static char *absolute_path(const char *path)
-{
-    if (path[0] == '/') return copy_string(path);
-
-    char *directory = current_directory();
-
-    if (directory == NULL) return NULL;
-
-    char *absolute = join_path(directory, path);
-    free(directory);
-    return absolute;
-}
-
 static char *playlist_directory(const char *path)
 {
-    char *directory = absolute_path(path);
+    char *directory = fs_absolute_path(path);
 
     if (directory == NULL) return NULL;
 
     char *slash = strrchr(directory, '/');
+    char *backslash = strrchr(directory, '\\');
 
-    if (slash == directory) {
+    if (slash == NULL || (backslash != NULL && backslash > slash)) {
+        slash = backslash;
+    }
+
+    if (slash == directory ||
+        (slash == directory + 2 && directory[1] == ':')) {
         slash[1] = '\0';
     } else if (slash != NULL) {
         *slash = '\0';
@@ -192,7 +164,7 @@ static int read_line(FILE *file, char **result)
 
 static bool load_paths(const char *path, Path_List *paths)
 {
-    FILE *file = fopen(path, "rb");
+    FILE *file = fs_fopen(path, "rb");
 
     if (file == NULL) {
         mp_log(ERROR, "failed to open playlist \"%s\": %s", path,
@@ -234,8 +206,8 @@ static bool load_paths(const char *path, Path_List *paths)
             continue;
         }
 
-        char *entry =
-            line[0] == '/' ? copy_string(line) : join_path(directory, line);
+        char *entry = fs_path_is_absolute(line) ? copy_string(line)
+                                                : join_path(directory, line);
         free(line);
 
         if (entry == NULL || !path_list_append(paths, entry)) {
@@ -318,7 +290,7 @@ bool m3u_save(const Playlist *playlist, const char *path)
     memcpy(temporary, path, path_length);
     memcpy(temporary + path_length, ".tmp", sizeof(".tmp"));
 
-    FILE *file = fopen(temporary, "wb");
+    FILE *file = fs_fopen(temporary, "wb");
 
     if (file == NULL) {
         mp_log(ERROR, "failed to create playlist \"%s\": %s", path,
@@ -338,7 +310,7 @@ bool m3u_save(const Playlist *playlist, const char *path)
             break;
         }
 
-        char *absolute = absolute_path(track);
+        char *absolute = fs_absolute_path(track);
 
         if (absolute == NULL || fprintf(file, "%s\n", absolute) < 0) {
             success = false;
@@ -349,10 +321,10 @@ bool m3u_save(const Playlist *playlist, const char *path)
 
     if (fclose(file) != 0) success = false;
 
-    if (success && rename(temporary, path) != 0) success = false;
+    if (success && fs_rename(temporary, path) != 0) success = false;
 
     if (!success) {
-        remove(temporary);
+        fs_remove(temporary);
         mp_log(ERROR, "failed to save playlist: %s", path);
     }
 

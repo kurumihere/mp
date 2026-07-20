@@ -6,13 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-#ifdef _WIN32
-#include <direct.h>
-#endif
-
+#include "fs.h"
 #include "log.h"
 
 #define MAX_SESSION_PATH ((uint64_t)1024 * 1024)
@@ -116,97 +111,6 @@ static bool state_valid(const Session_State *state, size_t track_count)
            state->repeat_mode >= 0 && state->repeat_mode <= 2;
 }
 
-static bool make_parent_directories(const char *path)
-{
-    size_t length = strlen(path) + 1;
-    char *copy = malloc(length);
-
-    if (copy == NULL) return false;
-
-    memcpy(copy, path, length);
-
-    for (char *character = copy + 1; *character != '\0'; ++character) {
-        if (*character != '/') continue;
-
-        *character = '\0';
-
-#ifdef _WIN32
-        int result = _mkdir(copy);
-#else
-        int result = mkdir(copy, 0700);
-#endif
-
-        if (result != 0 && errno != EEXIST) {
-            free(copy);
-            return false;
-        }
-
-        *character = '/';
-    }
-
-    free(copy);
-    return true;
-}
-
-static char *absolute_path(const char *path)
-{
-    size_t path_length = strlen(path);
-
-    if (path[0] == '/') {
-        char *copy = malloc(path_length + 1);
-
-        if (copy != NULL) memcpy(copy, path, path_length + 1);
-
-        return copy;
-    }
-
-    size_t capacity = 256;
-    char *directory = NULL;
-
-    while (capacity <= MAX_SESSION_PATH) {
-        directory = malloc(capacity);
-
-        if (directory == NULL) return NULL;
-        if (getcwd(directory, capacity) != NULL) break;
-
-        int error = errno;
-        free(directory);
-        directory = NULL;
-
-        if (error != ERANGE) return NULL;
-
-        capacity *= 2;
-    }
-
-    if (directory == NULL) return NULL;
-
-    size_t directory_length = strlen(directory);
-    bool needs_separator =
-        directory_length > 0 && directory[directory_length - 1] != '/';
-
-    if (directory_length > SIZE_MAX - path_length - 2) {
-        free(directory);
-        return NULL;
-    }
-
-    size_t length =
-        directory_length + path_length + (needs_separator ? 2u : 1u);
-    char *absolute = malloc(length);
-
-    if (absolute != NULL) {
-        int written = snprintf(absolute, length, "%s%s%s", directory,
-                               needs_separator ? "/" : "", path);
-
-        if (written < 0 || (size_t)written >= length) {
-            free(absolute);
-            absolute = NULL;
-        }
-    }
-
-    free(directory);
-    return absolute;
-}
-
 static void free_paths(char **paths, size_t count)
 {
     if (paths == NULL) return;
@@ -227,25 +131,37 @@ void session_state_defaults(Session_State *state)
 
 bool session_default_path(char *path, size_t capacity)
 {
-    const char *state_home = getenv("XDG_STATE_HOME");
-    const char *home = getenv("HOME");
-    int written;
+    char *state_home = fs_environment("XDG_STATE_HOME");
+    char *home = fs_environment("HOME");
+    int written = -1;
 
-    if (state_home != NULL && state_home[0] != '\0') {
+    if (state_home != NULL) {
         written = snprintf(path, capacity, "%s/mpstaterc", state_home);
-    } else if (home != NULL && home[0] != '\0') {
+    } else if (home != NULL) {
         written = snprintf(path, capacity, "%s/.local/state/mpstaterc", home);
+#ifdef _WIN32
     } else {
-        return false;
+        char *app_data = fs_environment("APPDATA");
+
+        if (app_data != NULL) {
+            written = snprintf(path, capacity, "%s/mp/mpstaterc", app_data);
+        }
+        free(app_data);
+#else
+    } else {
+        written = -1;
+#endif
     }
 
+    free(home);
+    free(state_home);
     return written >= 0 && (size_t)written < capacity;
 }
 
 Session_Load_Result session_load(const char *path, Playlist *playlist,
                                  Session_State *state)
 {
-    FILE *file = fopen(path, "rb");
+    FILE *file = fs_fopen(path, "rb");
 
     if (file == NULL) {
         if (errno == ENOENT) return SESSION_LOAD_NOT_FOUND;
@@ -340,7 +256,7 @@ bool session_save(const char *path, const Playlist *playlist,
     size_t count = playlist_get_count(playlist);
 
     if (!state_valid(state, count) || count > MAX_SESSION_TRACKS ||
-        !make_parent_directories(path)) {
+        !fs_make_parent_directories(path)) {
         mp_log(ERROR, "failed to prepare saved session: %s", path);
         return false;
     }
@@ -356,7 +272,7 @@ bool session_save(const char *path, const Playlist *playlist,
     memcpy(temporary, path, path_length);
     memcpy(temporary + path_length, ".tmp", sizeof(".tmp"));
 
-    FILE *file = fopen(temporary, "wb");
+    FILE *file = fs_fopen(temporary, "wb");
 
     if (file == NULL) {
         mp_log(ERROR, "failed to create saved session \"%s\": %s", path,
@@ -378,7 +294,7 @@ bool session_save(const char *path, const Playlist *playlist,
 
     for (size_t i = 0; success && i < count; ++i) {
         const char *track = playlist_get(playlist, i);
-        char *absolute = track == NULL ? NULL : absolute_path(track);
+        char *absolute = track == NULL ? NULL : fs_absolute_path(track);
         size_t length = absolute == NULL ? 0 : strlen(absolute);
 
         if (length == 0 || length > MAX_SESSION_PATH) {
@@ -393,10 +309,10 @@ bool session_save(const char *path, const Playlist *playlist,
 
     if (fclose(file) != 0) success = false;
 
-    if (success && rename(temporary, path) != 0) success = false;
+    if (success && fs_rename(temporary, path) != 0) success = false;
 
     if (!success) {
-        remove(temporary);
+        fs_remove(temporary);
         mp_log(ERROR, "failed to save session: %s", path);
     }
 

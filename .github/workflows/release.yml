@@ -18,7 +18,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       package: true
-      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
       version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       packaging-ref: ${{ github.sha }}
 
@@ -64,8 +64,8 @@ jobs:
         run: |
           mkdir existing
           gh release download "$RELEASE_TAG" --pattern 'mp-*' --dir existing
-          for asset in existing/*; do
-            rm -f "dist/$(basename "$asset")"
+          for asset in dist/mp-*; do
+            rm -f "existing/$(basename "$asset")"
           done
           find existing dist -maxdepth 1 -type f -name 'mp-*' -print0 | \
             sort -z | xargs -0 sha256sum | \

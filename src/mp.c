@@ -8,6 +8,7 @@
 
 #include "assets.h"
 #include "config.h"
+#include "fs.h"
 #include "font_renderer.h"
 #include "log.h"
 #include "m3u.h"
@@ -24,7 +25,6 @@
 #include "tinyfiledialogs/tinyfiledialogs.h"
 #include "worker_thread.h"
 
-#define AUDIO_FILE_EXTENSIONS ".flac;.mp3;.wav"
 #define CONFIG_PATH_SIZE 4096
 #define MP_VERSION "0.2.0"
 #define SIDE_PANEL_ANIMATION_SPEED 14.0f
@@ -79,16 +79,17 @@ static int compare_paths(const void *left, const void *right)
 
 static bool append_directory(Playlist *playlist, const char *path)
 {
-    FilePathList files =
-        LoadDirectoryFilesEx(path, AUDIO_FILE_EXTENSIONS, true);
+    Fs_Path_List files = {0};
+
+    if (!fs_list_audio_files(path, &files)) return false;
 
     if (files.count > 1) {
-        qsort(files.paths, files.count, sizeof(*files.paths), compare_paths);
+        qsort(files.items, files.count, sizeof(*files.items), compare_paths);
     }
 
-    bool success = playlist_append(playlist, (const char *const *)files.paths,
+    bool success = playlist_append(playlist, (const char *const *)files.items,
                                    files.count);
-    UnloadDirectoryFiles(files);
+    fs_path_list_uninit(&files);
     return success;
 }
 
@@ -118,7 +119,7 @@ static bool append_inputs_in_place(Playlist *playlist, const char *const *paths,
     for (size_t i = 0; i < count; ++i) {
         bool success;
 
-        if (DirectoryExists(paths[i])) {
+        if (fs_is_directory(paths[i])) {
             success = append_directory(playlist, paths[i]);
         } else if (m3u_is_path(paths[i])) {
             success = m3u_append(playlist, paths[i], NULL);
@@ -2409,7 +2410,7 @@ static bool parse_options(int argc, char **argv, Options *options,
     return true;
 }
 
-int main(int argc, char **argv)
+static int mp_main(int argc, char **argv)
 {
     const char *program = argv[0];
     Options options = {0};
@@ -3733,4 +3734,20 @@ int main(int argc, char **argv)
     player_uninit(&player);
 
     return exit_code;
+}
+
+int main(int argc, char **argv)
+{
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+
+    if (!fs_windows_command_line(&argc, &argv)) return 1;
+
+    int result = mp_main(argc, argv);
+    fs_windows_command_line_free(argc, argv);
+    return result;
+#else
+    return mp_main(argc, argv);
+#endif
 }
