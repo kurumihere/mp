@@ -1,0 +1,69 @@
+name: mp-player
+arch: amd64
+platform: linux
+version: ${MP_VERSION}
+version_schema: semver
+release: 1
+section: sound
+priority: optional
+maintainer: kurumihere <kurumihere@disroot.org>
+description: music player
+vendor: kurumihere
+homepage: https://github.com/kurumihere/mp
+license: MIT
+suggests:
+  - kdialog
+  - yad
+  - zenity
+contents:
+  - src: build/mp
+    dst: /usr/bin/mp
+    file_info:
+      mode: 0755
+  - src: build/io.github.kurumihere.mp.desktop
+    dst: /usr/share/applications/io.github.kurumihere.mp.desktop
+  - src: build/io.github.kurumihere.mp.metainfo.xml
+    dst: /usr/share/metainfo/io.github.kurumihere.mp.metainfo.xml
+  - src: assets/icon.png
+    dst: /usr/share/pixmaps/mp.png
+  - src: README.md
+    dst: /usr/share/doc/mp-player/README.md
+  - src: LICENSE
+    dst: /usr/share/doc/mp-player/copyright
+    packager: deb
+  - src: assets/fonts/OFL-*.txt
+    dst: /usr/share/doc/mp-player/
+    packager: deb
+  - src: LICENSE
+    dst: /usr/share/licenses/mp-player/LICENSE
+    packager: rpm
+  - src: assets/fonts/OFL-*.txt
+    dst: /usr/share/licenses/mp-player/
+    packager: rpm
+overrides:
+  deb:
+    depends:
+      - libasound2
+      - libc6
+      - libfreetype6
+      - libglib2.0-0
+      - libgl1
+      - libx11-6
+      - libxcursor1
+      - libxext6
+      - libxi6
+      - libxinerama1
+      - libxrandr2
+  rpm:
+    depends:
+      - alsa-lib
+      - freetype
+      - glib2
+      - glibc
+      - libglvnd-glx
+      - libX11
+      - libXcursor
+      - libXext
+      - libXi
+      - libXinerama
+      - libXrandr

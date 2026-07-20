@@ -1,1 +1,5 @@
 thirdparty/raylib/** -whitespace
+
+* -linguist-detectable
+*.c linguist-detectable linguist-language=C
+*.h linguist-detectable linguist-language=C

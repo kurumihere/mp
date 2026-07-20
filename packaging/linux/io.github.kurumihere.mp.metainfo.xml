@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.kurumihere.mp</id>
+  <name>mp</name>
+  <summary>music player</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      mp is a simple desktop music player written in C. It uses miniaudio for
+      decoding and playback and raylib for the interface.
+    </p>
+  </description>
+  <developer id="io.github.kurumihere">
+    <name>kurumihere</name>
+  </developer>
+  <launchable type="desktop-id">io.github.kurumihere.mp.desktop</launchable>
+  <url type="homepage">https://github.com/kurumihere/mp</url>
+  <url type="bugtracker">https://github.com/kurumihere/mp/issues</url>
+  <provides>
+    <binary>mp</binary>
+  </provides>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>

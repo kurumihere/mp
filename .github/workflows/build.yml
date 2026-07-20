@@ -11,12 +11,21 @@ on:
       package:
         type: boolean
         default: false
+      ref:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
+      packaging-ref:
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,35 +41,42 @@ jobs:
       matrix:
         include:
           - name: linux
-            os: ubuntu-24.04
+            os: ubuntu-22.04
             shell: bash
-            package: linux-x86_64
-            extension: tar.gz
           - name: windows
             os: windows-2025
             shell: msys2 {0}
-            package: windows-x86_64
-            extension: zip
           - name: macos
             os: macos-15
             shell: bash
-            package: macos-arm64
-            extension: tar.gz
 
     steps:
       - name: checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
+
+      - name: checkout packaging
+        if: inputs.packaging-ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.packaging-ref }}
+          path: .release
+          persist-credentials: false
+          sparse-checkout: packaging
 
       - name: install linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
+            appstream \
+            imagemagick \
             libgl1-mesa-dev \
             libx11-dev \
             libxcursor-dev \
+            desktop-file-utils \
             libfreetype6-dev \
             libglib2.0-dev \
             libxi-dev \
@@ -76,43 +92,67 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-freetype
             mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-ntldd
             mingw-w64-ucrt-x86_64-pkgconf
 
       - name: install macos dependencies
         if: runner.os == 'macOS'
-        run: brew install freetype glib pkgconf
+        run: brew install dylibbundler freetype glib pkgconf
 
       - name: bootstrap
         run: cc -std=c99 -o nob nob.c
 
       - name: build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ runner.os == 'macOS' && '13.0' || '' }}
         run: ./nob
 
-      - name: package
-        if: inputs.package && runner.os != 'Windows'
+      - name: package metadata
+        if: inputs.package
+        id: package
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          package="mp-${version}-${{ matrix.package }}"
-          mkdir -p "dist/${package}"
-          cp build/mp LICENSE README.md assets/fonts/OFL-*.txt "dist/${package}/"
-          tar -czf "dist/${package}.tar.gz" -C dist "${package}"
+          release="${{ inputs.version || github.ref_name }}"
+          version="${release#v}"
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release version: $release" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: package
+      - name: package linux
+        if: inputs.package && runner.os == 'Linux'
+        run: >-
+          bash
+          "${{ inputs.packaging-ref != '' && '.release/packaging' || 'packaging' }}/linux/package.sh"
+          "${{ steps.package.outputs.version }}"
+
+      - name: package windows
         if: inputs.package && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          $package = "mp-$version-${{ matrix.package }}"
-          New-Item -ItemType Directory -Path "dist/$package" | Out-Null
-          Copy-Item build/mp.exe, LICENSE, README.md, assets/fonts/OFL-*.txt -Destination "dist/$package"
-          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
+        run: >-
+          bash
+          "${{ inputs.packaging-ref != '' && '.release/packaging' || 'packaging' }}/windows/package.sh"
+          "${{ steps.package.outputs.version }}"
+
+      - name: package macos
+        if: inputs.package && runner.os == 'macOS'
+        run: >-
+          bash
+          "${{ inputs.packaging-ref != '' && '.release/packaging' || 'packaging' }}/macos/package.sh"
+          "${{ steps.package.outputs.version }}"
 
       - name: upload
         if: inputs.package
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.name }}
-          path: dist/mp-*.${{ matrix.extension }}
+          path: |
+            dist/mp-*.AppImage
+            dist/mp-*.deb
+            dist/mp-*.dmg
+            dist/mp-*.exe
+            dist/mp-*.rpm
+            dist/mp-*.tar.gz
+            dist/mp-*.zip
           if-no-files-found: error
           retention-days: 1

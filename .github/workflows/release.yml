@@ -3,6 +3,12 @@ name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to package
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,6 +18,9 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       package: true
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      packaging-ref: ${{ github.sha }}
 
   release:
     needs: build
@@ -29,10 +38,12 @@ jobs:
           merge-multiple: true
 
       - name: checksums
+        if: github.event_name == 'push'
         working-directory: dist
-        run: sha256sum mp-* > sha256sums.txt
+        run: sha256sum mp-* | sort -k2 > sha256sums.txt
 
       - name: create draft
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -43,3 +54,27 @@ jobs:
           --notes ""
           --title "${GITHUB_REF_NAME}"
           --verify-tag
+
+      - name: preserve existing assets
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir existing
+          gh release download "$RELEASE_TAG" --pattern 'mp-*' --dir existing
+          for asset in existing/*; do
+            rm -f "dist/$(basename "$asset")"
+          done
+          find existing dist -maxdepth 1 -type f -name 'mp-*' -print0 | \
+            sort -z | xargs -0 sha256sum | \
+            sed 's#existing/##; s#dist/##' | sort -k2 > dist/sha256sums.txt
+
+      - name: update existing release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
