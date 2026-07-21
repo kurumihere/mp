@@ -1987,6 +1987,27 @@ static void draw_button(Rectangle bounds, Button_Icon icon,
     draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
 }
 
+static bool format_track_details(const Track_Metadata *metadata, char *text,
+                                 size_t capacity)
+{
+    bool has_artist = metadata->artist[0] != '\0';
+    bool has_album = metadata->album[0] != '\0';
+
+    if (has_artist && has_album) {
+        snprintf(text, capacity, "%s | %s", metadata->artist,
+                 metadata->album);
+    } else if (has_artist) {
+        snprintf(text, capacity, "%s", metadata->artist);
+    } else if (has_album) {
+        snprintf(text, capacity, "%s", metadata->album);
+    } else {
+        if (capacity > 0) text[0] = '\0';
+        return false;
+    }
+
+    return true;
+}
+
 static bool collect_playlist_font_text(const Playlist *playlist,
                                        const Playlist_Search *search,
                                        const Ui_Layout *layout, float scroll)
@@ -2014,21 +2035,9 @@ static bool collect_playlist_font_text(const Playlist *playlist,
             return false;
         }
 
-        bool has_artist = metadata->artist[0] != '\0';
-        bool has_album = metadata->album[0] != '\0';
-
-        if (!has_artist && !has_album) continue;
-
         char details[METADATA_TEXT_SIZE * 2 + 4];
 
-        if (has_artist && has_album) {
-            snprintf(details, sizeof(details), "%s | %s", metadata->artist,
-                     metadata->album);
-        } else if (has_artist) {
-            snprintf(details, sizeof(details), "%s", metadata->artist);
-        } else {
-            snprintf(details, sizeof(details), "%s", metadata->album);
-        }
+        if (!format_track_details(metadata, details, sizeof(details))) continue;
 
         if (!collect_font_text(details, layout->playlist_details_size)) {
             return false;
@@ -2103,8 +2112,9 @@ static void draw_playlist_panel(const Playlist *playlist,
         char title[METADATA_TEXT_SIZE + 32];
         snprintf(title, sizeof(title), "%zu. %s", index + 1, metadata->title);
 
-        bool has_artist = metadata->artist[0] != '\0';
-        bool has_album = metadata->album[0] != '\0';
+        char details[METADATA_TEXT_SIZE * 2 + 4];
+        bool has_details =
+            format_track_details(metadata, details, sizeof(details));
         float text_padding = snap_pixel(clamp_float(
             9.0f * layout->scale, 7.0f, 12.0f));
         float text_x = snap_pixel(item.x + text_padding);
@@ -2112,7 +2122,7 @@ static void draw_playlist_panel(const Playlist *playlist,
         Color title_color = index == current ? theme->text_primary
                                              : theme->text_secondary;
 
-        if (!has_artist && !has_album) {
+        if (!has_details) {
             Rectangle title_bounds = {
                 text_x,
                 snap_pixel(item.y + (item.height - title_size) / 2.0f),
@@ -2132,16 +2142,6 @@ static void draw_playlist_panel(const Playlist *playlist,
             };
             Color details_color = index == current ? theme->text_secondary
                                                    : theme->text_muted;
-            char details[METADATA_TEXT_SIZE * 2 + 4];
-
-            if (has_artist && has_album) {
-                snprintf(details, sizeof(details), "%s | %s", metadata->artist,
-                         metadata->album);
-            } else if (has_artist) {
-                snprintf(details, sizeof(details), "%s", metadata->artist);
-            } else {
-                snprintf(details, sizeof(details), "%s", metadata->album);
-            }
 
             Rectangle details_bounds = {
                 text_x,
@@ -3482,15 +3482,7 @@ static int mp_main(int argc, char **argv)
                          (int)snap_pixel(18.0f * layout.scale);
 
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
-
-        if (metadata.artist[0] != '\0' && metadata.album[0] != '\0') {
-            snprintf(details_text, sizeof(details_text), "%s | %s",
-                     metadata.artist, metadata.album);
-        } else if (metadata.artist[0] != '\0') {
-            snprintf(details_text, sizeof(details_text), "%s", metadata.artist);
-        } else {
-            snprintf(details_text, sizeof(details_text), "%s", metadata.album);
-        }
+        format_track_details(&metadata, details_text, sizeof(details_text));
 
         float progress = length > 0.0f ? cursor / length : 0.0f;
 
