@@ -1977,6 +1977,7 @@ static int mp_main(int argc, char **argv)
                 ? NULL
                 : playlist_get(&playlist, playlist_get_current(&playlist));
         album_art_update(&album_art, album_art_path);
+        album_art_advance(&album_art, ui_frame_time);
         const char *status;
 
         switch (state) {
@@ -2147,7 +2148,7 @@ static int mp_main(int argc, char **argv)
             ui_font_draw(drop_hint, drop_hint_x, drop_hint_y, drop_hint_size,
                          theme->text_muted);
         } else {
-            album_art_draw(&album_art, layout.album_art, theme->surface);
+            album_art_draw(&album_art, layout.album_art, theme->background);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale,
                           theme);
             draw_scrolling_text(metadata.title, current_title_bounds,
