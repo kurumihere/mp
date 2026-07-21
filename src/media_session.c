@@ -6,6 +6,7 @@
 
 #include "log.h"
 
+#if !defined(_WIN32)
 static char *copy_string(const char *text)
 {
     size_t size = strlen(text) + 1;
@@ -14,18 +15,20 @@ static char *copy_string(const char *text)
     if (copy != NULL) memcpy(copy, text, size);
     return copy;
 }
+#endif
 
 #if defined(_WIN32) && defined(__has_include)
 #if __has_include(<systemmediatransportcontrolsinterop.h>) &&                  \
     __has_include(<windows.media.h>) && __has_include(<wrl/client.h>)
+#if __has_include(<wrl/event.h>) &&                                            \
+    __has_include(<wrl/wrappers/corewrappers.h>)
 #define MP_HAS_WINDOWS_SMTC 1
+#endif
 #endif
 #endif
 
 #if defined(MP_HAS_WINDOWS_SMTC)
 
-#define WINVER 0x0A00
-#define _WIN32_WINNT 0x0A00
 #include <new>
 #include <roapi.h>
 #include <systemmediatransportcontrolsinterop.h>
