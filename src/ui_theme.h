@@ -11,6 +11,7 @@
 typedef struct {
     Color background;
     Color surface;
+    Color solid_surface;
     Color surface_border;
     Color spectrum;
     Color button;

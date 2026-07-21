@@ -372,6 +372,19 @@ static void draw_panel_frame(Rectangle panel, Color color)
     }
 }
 
+static void draw_panel_surface(Rectangle panel, bool translucent,
+                               const Ui_Theme *theme)
+{
+    Rectangle shadow = panel;
+    shadow.x += 5.0f;
+    shadow.y += 6.0f;
+    DrawRectangleRec(shadow, (Color){0, 0, 0, 28});
+    Color surface = translucent ? theme->surface : theme->solid_surface;
+
+    DrawRectangleRec(panel, surface);
+    draw_panel_frame(panel, theme->surface_border);
+}
+
 static void draw_open_menu(const Open_Menu_Layout *menu, Vector2 mouse,
                            float scale, const Ui_Theme *theme)
 {
@@ -379,7 +392,7 @@ static void draw_open_menu(const Open_Menu_Layout *menu, Vector2 mouse,
     const Rectangle rows[] = {menu->files, menu->folder};
     const char *labels[] = {"Files", "Folder"};
 
-    DrawRectangleRec(menu->panel, theme->surface);
+    draw_panel_surface(menu->panel, true, theme);
 
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         bool hovered = CheckCollisionPointRec(mouse, rows[i]);
@@ -393,8 +406,6 @@ static void draw_open_menu(const Open_Menu_Layout *menu, Vector2 mouse,
                             1.0f),
             font_size, theme->text_primary);
     }
-
-    draw_panel_frame(menu->panel, theme->surface_border);
 }
 
 static size_t spectrum_bar_count(Rectangle bounds, float scale)
@@ -506,6 +517,10 @@ static void draw_button(Rectangle bounds, Ui_Icon icon,
 
     DrawRectangleRec(bounds, fill);
 
+    if (enabled && (hovered || active)) {
+        draw_panel_frame(bounds, theme->surface_border);
+    }
+
     ui_icon_transition_draw(icon_transition, icon, bounds, opacity);
 }
 
@@ -584,8 +599,7 @@ static void draw_playlist_panel(const Playlist *playlist,
     float step = layout->playlist_item_height + layout->playlist_item_gap;
     float scroll_offset = (scroll - (float)first) * step;
 
-    DrawRectangleRec(panel, theme->surface);
-    draw_panel_frame(panel, theme->surface_border);
+    draw_panel_surface(panel, false, theme);
     ui_font_draw("Playlist", (int)layout->playlist_viewport.x,
                  (int)snap_pixel(panel.y + (layout->playlist_top - panel.y -
                                             layout->playlist_header_size) /
@@ -769,6 +783,11 @@ static void draw_playlist_panel(const Playlist *playlist,
     int open_width = ui_font_measure(open_text, layout->playlist_search_size);
 
     DrawRectangleRec(open, open_fill);
+
+    if (open_hovered || picker_busy) {
+        draw_panel_frame(open, theme->surface_border);
+    }
+
     ui_font_draw(
         open_text,
         (int)snap_pixel(open.x + (open.width - (float)open_width) / 2.0f),
@@ -839,8 +858,7 @@ static void draw_settings_panel(const Ui_Layout *layout,
 {
     Rectangle panel = layout->settings_panel;
 
-    DrawRectangleRec(panel, theme->surface);
-    draw_panel_frame(panel, theme->surface_border);
+    draw_panel_surface(panel, false, theme);
     ui_font_draw("Settings", (int)snap_pixel(panel.x + 20.0f * layout->scale),
                  (int)snap_pixel(panel.y + 20.0f * layout->scale),
                  ui_font_crisp_size(35.0f * layout->scale, 30, 50),
@@ -861,8 +879,11 @@ static void draw_playlist_toggle(Rectangle bounds, bool open,
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
     Color fill = hovered ? theme->button_hover : theme->button;
+    fill.a = (unsigned char)((float)fill.a * opacity);
+    DrawRectangleRec(bounds, fill);
 
-    DrawRectangleRec(bounds, Fade(fill, opacity));
+    if (hovered) draw_panel_frame(bounds, theme->surface_border);
+
     ui_icon_transition_draw(icon_transition,
                             open ? UI_ICON_PLAYLIST_BACK
                                  : UI_ICON_PLAYLIST_FORWARD,
