@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "album_art.h"
 #include "assets.h"
 #include "config.h"
 #include "file_picker.h"
@@ -513,11 +514,6 @@ static void update_theme_transition(Ui_Theme_Transition *transition,
 }
 
 typedef struct {
-    Texture2D texture;
-    char *track_path;
-} Album_Art;
-
-typedef struct {
     float scale;
     int width;
     int height;
@@ -855,100 +851,6 @@ static void draw_open_menu(const Open_Menu_Layout *menu, Vector2 mouse,
     }
 
     draw_panel_frame(menu->panel, theme->surface_border);
-}
-
-static void album_art_clear(Album_Art *album_art)
-{
-    if (IsTextureValid(album_art->texture)) {
-        UnloadTexture(album_art->texture);
-    }
-
-    free(album_art->track_path);
-    *album_art = (Album_Art){0};
-}
-
-static void album_art_update(Album_Art *album_art, const char *track_path)
-{
-    if ((track_path == NULL && album_art->track_path == NULL) ||
-        (track_path != NULL && album_art->track_path != NULL &&
-         strcmp(track_path, album_art->track_path) == 0)) {
-        return;
-    }
-
-    album_art_clear(album_art);
-
-    if (track_path == NULL) return;
-
-    size_t path_size = strlen(track_path) + 1;
-    album_art->track_path = malloc(path_size);
-
-    if (album_art->track_path == NULL) {
-        mp_log(WARNING, "failed to remember album art path");
-        return;
-    }
-
-    memcpy(album_art->track_path, track_path, path_size);
-
-    Track_Cover cover;
-
-    if (!metadata_cover_load(track_path, &cover)) return;
-
-    const char *file_type = cover.format == TRACK_COVER_JPEG ? ".jpg" : ".png";
-    Image image = {0};
-
-    if (cover.size <= INT_MAX) {
-        image = LoadImageFromMemory(file_type, cover.data, (int)cover.size);
-    }
-
-    metadata_cover_unload(&cover);
-
-    if (!IsImageValid(image)) {
-        mp_log(WARNING, "failed to decode album art for \"%s\"", track_path);
-        return;
-    }
-
-    Texture2D texture = LoadTextureFromImage(image);
-    UnloadImage(image);
-
-    if (!IsTextureValid(texture)) {
-        mp_log(WARNING, "failed to upload album art for \"%s\"", track_path);
-        return;
-    }
-
-    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
-    album_art->texture = texture;
-}
-
-static void draw_album_art(const Album_Art *album_art, Rectangle bounds,
-                           const Ui_Theme *theme)
-{
-    if (!IsTextureValid(album_art->texture) || bounds.width <= 0.0f ||
-        bounds.height <= 0.0f) {
-        return;
-    }
-
-    float horizontal_scale = bounds.width / album_art->texture.width;
-    float vertical_scale = bounds.height / album_art->texture.height;
-    float scale =
-        horizontal_scale < vertical_scale ? horizontal_scale : vertical_scale;
-    Rectangle destination = snap_rectangle((Rectangle){
-        bounds.x +
-            (bounds.width - (float)album_art->texture.width * scale) / 2.0f,
-        bounds.y +
-            (bounds.height - (float)album_art->texture.height * scale) / 2.0f,
-        (float)album_art->texture.width * scale,
-        (float)album_art->texture.height * scale,
-    });
-    Rectangle source = {
-        0.0f,
-        0.0f,
-        (float)album_art->texture.width,
-        (float)album_art->texture.height,
-    };
-
-    DrawRectangleRec(bounds, theme->surface);
-    DrawTexturePro(album_art->texture, source, destination, (Vector2){0}, 0.0f,
-                   WHITE);
 }
 
 static size_t spectrum_bar_count(Rectangle bounds, float scale)
@@ -2993,7 +2895,7 @@ static int mp_main(int argc, char **argv)
             ui_font_draw(drop_hint, drop_hint_x, drop_hint_y, drop_hint_size,
                          theme->text_muted);
         } else {
-            draw_album_art(&album_art, layout.album_art, theme);
+            album_art_draw(&album_art, layout.album_art, theme->surface);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale,
                           theme);
             draw_scrolling_text(metadata.title, current_title_bounds,
