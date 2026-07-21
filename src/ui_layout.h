@@ -40,6 +40,7 @@ typedef struct {
     Rectangle playlist_open;
     Rectangle settings_panel;
     Rectangle settings_playlist_side;
+    Rectangle settings_global_media_keys;
     Rectangle playlist_toggle;
     Rectangle playlist_toggle_reveal;
 } Ui_Layout;

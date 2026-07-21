@@ -31,14 +31,12 @@ typedef struct {
 #define GENERATED_ASSETS_SOURCE "build/generated/assets.c"
 
 static const Asset_Source asset_sources[] = {
-    {"assets/icons/black/back-black.svg", "back_black_svg",
-     "back-black.svg"},
+    {"assets/icons/black/back-black.svg", "back_black_svg", "back-black.svg"},
     {"assets/icons/black/forward-black.svg", "forward_black_svg",
      "forward-black.svg"},
     {"assets/icons/black/pause-black.svg", "pause_black_svg",
      "pause-black.svg"},
-    {"assets/icons/black/play-black.svg", "play_black_svg",
-     "play-black.svg"},
+    {"assets/icons/black/play-black.svg", "play_black_svg", "play-black.svg"},
     {"assets/icons/black/repeat-black.svg", "repeat_black_svg",
      "repeat-black.svg"},
     {"assets/icons/black/repeat-one-black.svg", "repeat_one_black_svg",
@@ -49,14 +47,12 @@ static const Asset_Source asset_sources[] = {
      "shuffle-black.svg"},
     {"assets/icons/black/playlist-black.svg", "playlist_black_svg",
      "playlist-black.svg"},
-    {"assets/icons/white/back-white.svg", "back_white_svg",
-     "back-white.svg"},
+    {"assets/icons/white/back-white.svg", "back_white_svg", "back-white.svg"},
     {"assets/icons/white/forward-white.svg", "forward_white_svg",
      "forward-white.svg"},
     {"assets/icons/white/pause-white.svg", "pause_white_svg",
      "pause-white.svg"},
-    {"assets/icons/white/play-white.svg", "play_white_svg",
-     "play-white.svg"},
+    {"assets/icons/white/play-white.svg", "play_white_svg", "play-white.svg"},
     {"assets/icons/white/repeat-white.svg", "repeat_white_svg",
      "repeat-white.svg"},
     {"assets/icons/white/repeat-one-white.svg", "repeat_one_white_svg",
@@ -88,6 +84,7 @@ static const char *app_sources[] = {
     "src/config.c",
     "src/svg.c",
     "src/log.c",
+    "src/media_keys.c",
     "src/player.c",
     "src/playback_order.c",
     "src/playlist.c",
@@ -104,10 +101,8 @@ static const char *app_sources[] = {
 };
 
 static const char *raylib_sources[] = {
-    "thirdparty/raylib/src/rcore.c",
-    "thirdparty/raylib/src/rshapes.c",
-    "thirdparty/raylib/src/rtextures.c",
-    "thirdparty/raylib/src/rtext.c",
+    "thirdparty/raylib/src/rcore.c",     "thirdparty/raylib/src/rshapes.c",
+    "thirdparty/raylib/src/rtextures.c", "thirdparty/raylib/src/rtext.c",
     "thirdparty/raylib/src/rglfw.c",
 };
 
@@ -173,15 +168,15 @@ static bool generate_assets(void)
     }
 
     sb_appendf(&output,
-               "};\n\n_Static_assert(ASSET_COUNT == %zu, \"asset list mismatch\");\n\n",
+               "};\n\n_Static_assert(ASSET_COUNT == %zu, \"asset list "
+               "mismatch\");\n\n",
                ARRAY_LEN(asset_sources));
-    sb_append_cstr(
-        &output,
-        "Embedded_Asset asset_get(Asset_Id id)\n"
-        "{\n"
-        "    if ((int)id < 0 || id >= ASSET_COUNT) return (Embedded_Asset){0};\n"
-        "    return assets[id];\n"
-        "}\n");
+    sb_append_cstr(&output, "Embedded_Asset asset_get(Asset_Id id)\n"
+                            "{\n"
+                            "    if ((int)id < 0 || id >= ASSET_COUNT) return "
+                            "(Embedded_Asset){0};\n"
+                            "    return assets[id];\n"
+                            "}\n");
 
     const char *temporary = "build/generated/assets.c.tmp";
     bool result = write_entire_file(temporary, output.items, output.count) &&
@@ -287,8 +282,7 @@ static void append_platform_options(Cmd *cmd, Platform platform)
     } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
-                   "-framework", "CoreVideo", "-framework",
-                   "CoreFoundation");
+                   "-framework", "CoreVideo", "-framework", "CoreFoundation");
     } else {
         cmd_append(cmd, "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11");
     }
@@ -296,11 +290,10 @@ static void append_platform_options(Cmd *cmd, Platform platform)
 
 static void append_compile_options(Cmd *cmd, Platform platform)
 {
-    cmd_append(cmd, "-std=c11", "-g", "-Wall",
-               "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare",
-               "-Wno-format", "-Wno-missing-braces",
-               "-Wno-missing-field-initializers", "-fno-strict-aliasing",
-               "-Werror=implicit-function-declaration",
+    cmd_append(cmd, "-std=c11", "-g", "-Wall", "-Wextra",
+               "-Wno-unused-parameter", "-Wno-sign-compare", "-Wno-format",
+               "-Wno-missing-braces", "-Wno-missing-field-initializers",
+               "-fno-strict-aliasing", "-Werror=implicit-function-declaration",
                "-DPLATFORM_DESKTOP_GLFW", "-DGRAPHICS_API_OPENGL_33",
                "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
                "-DSUPPORT_FILEFORMAT_JPG=1", "-I", "thirdparty/raylib/src",
@@ -332,7 +325,8 @@ static bool compile_source(const Build *build, const char *source,
                    platform_compile_options->count);
 
     if (build->platform == MP_PLATFORM_MACOS &&
-        strcmp(source, "thirdparty/raylib/src/rglfw.c") == 0) {
+        (strcmp(source, "thirdparty/raylib/src/rglfw.c") == 0 ||
+         strcmp(source, "src/media_keys.c") == 0)) {
         cmd_append(&cmd, "-x", "objective-c");
     }
 
@@ -348,8 +342,7 @@ static int non_space(int character)
 }
 
 static bool pkg_config_arguments(const char *option, const char *package,
-                                 const char *output_path,
-                                 File_Paths *arguments)
+                                 const char *output_path, File_Paths *arguments)
 {
     Cmd cmd = {0};
     const char *pkg_config = environment_tool("PKG_CONFIG");
@@ -395,18 +388,16 @@ static bool build_app(const Build *build)
     File_Paths platform_link_options = {0};
     Procs procs = {0};
     int processor_count = nob_nprocs();
-    size_t jobs = processor_count > 0 ? (size_t) processor_count : 1;
+    size_t jobs = processor_count > 0 ? (size_t)processor_count : 1;
     bool result = true;
 
-    const char *glib_package = build->platform == MP_PLATFORM_LINUX
-                                   ? "gio-2.0"
-                                   : "glib-2.0";
-    result = pkg_config_arguments("--cflags", glib_package,
-                                  "build/glib-cflags.txt",
-                                  &platform_compile_options) &&
-             pkg_config_arguments("--libs", glib_package,
-                                  "build/glib-libs.txt",
-                                  &platform_link_options);
+    const char *glib_package =
+        build->platform == MP_PLATFORM_LINUX ? "gio-2.0" : "glib-2.0";
+    result =
+        pkg_config_arguments("--cflags", glib_package, "build/glib-cflags.txt",
+                             &platform_compile_options) &&
+        pkg_config_arguments("--libs", glib_package, "build/glib-libs.txt",
+                             &platform_link_options);
 
     if (result) {
         result = pkg_config_arguments("--cflags", "freetype2",

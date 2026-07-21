@@ -145,6 +145,12 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
                     44.0f, 68.0f));
     float playlist_item_gap =
         snap_pixel(clamp_float(4.0f * panel_scale, 3.0f, 7.0f));
+    float settings_option_height =
+        snap_pixel(clamp_float(64.0f * scale, 52.0f, 88.0f));
+    float settings_option_gap = snap_pixel(10.0f * scale);
+    float settings_option_x = panel_x + 16.0f * scale;
+    float settings_option_y = panel_y + 72.0f * scale;
+    float settings_option_width = panel_width - 32.0f * scale;
 
     Ui_Layout layout = {
         .scale = scale,
@@ -186,11 +192,17 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
         .playlist_open = {panel_x + panel_width - panel_inner - open_width,
                           search_y, open_width, search_height},
         .settings_panel = {panel_x, panel_y, panel_width, panel_height},
-        .settings_playlist_side = {panel_x + 16.0f * scale,
-                                   panel_y + 72.0f * scale,
-                                   panel_width - 32.0f * scale,
-                                   snap_pixel(clamp_float(64.0f * scale, 52.0f,
-                                                          88.0f))},
+        .settings_playlist_side = {settings_option_x, settings_option_y,
+                                   settings_option_width,
+                                   settings_option_height},
+        .settings_global_media_keys =
+            {
+                settings_option_x,
+                settings_option_y + settings_option_height +
+                    settings_option_gap,
+                settings_option_width,
+                settings_option_height,
+            },
         .playlist_toggle = {toggle_x, ((float)height - toggle_height) / 2.0f,
                             toggle_width, toggle_height},
     };
@@ -241,6 +253,8 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
     layout.settings_panel = snap_rectangle(layout.settings_panel);
     layout.settings_playlist_side =
         snap_rectangle(layout.settings_playlist_side);
+    layout.settings_global_media_keys =
+        snap_rectangle(layout.settings_global_media_keys);
     layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
     layout.playlist_toggle_reveal =
         snap_rectangle(layout.playlist_toggle_reveal);

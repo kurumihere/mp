@@ -108,14 +108,14 @@ bool player_load(Player *player, const char *path)
     wchar_t *wide_path = fs_utf8_to_utf16(path);
     result = wide_path == NULL
                  ? MA_INVALID_FILE
-                 : ma_sound_init_from_file_w(
-                       &player->engine, wide_path, MA_SOUND_FLAG_STREAM, NULL,
-                       NULL, &player->sounds[next_sound]);
+                 : ma_sound_init_from_file_w(&player->engine, wide_path,
+                                             MA_SOUND_FLAG_STREAM, NULL, NULL,
+                                             &player->sounds[next_sound]);
     free(wide_path);
 #else
-    result = ma_sound_init_from_file(&player->engine, path,
-                                     MA_SOUND_FLAG_STREAM, NULL, NULL,
-                                     &player->sounds[next_sound]);
+    result =
+        ma_sound_init_from_file(&player->engine, path, MA_SOUND_FLAG_STREAM,
+                                NULL, NULL, &player->sounds[next_sound]);
 #endif
 
     if (result != MA_SUCCESS) {
@@ -146,6 +146,7 @@ bool player_load(Player *player, const char *path)
     }
 
     player->active_sound = next_sound;
+    player->stopped = false;
 
     mp_log(INFO, "playing \"%s\"", path);
     return true;
@@ -159,6 +160,7 @@ void player_clear(Player *player)
 
     ma_sound_uninit(sound);
     player->sound_initialized[player->active_sound] = false;
+    player->stopped = false;
 }
 
 void player_set_volume(Player *player, float volume)
@@ -236,6 +238,27 @@ bool player_toggle(Player *player)
         return false;
     }
 
+    player->stopped = false;
+    return true;
+}
+
+bool player_stop(Player *player)
+{
+    ma_sound *sound = player_get_sound(player);
+
+    if (sound == NULL) return true;
+
+    ma_result result = ma_sound_stop(sound);
+
+    if (result == MA_SUCCESS) result = ma_sound_seek_to_pcm_frame(sound, 0);
+
+    if (result != MA_SUCCESS) {
+        mp_log(ERROR, "failed to stop playback: %s",
+               ma_result_description(result));
+        return false;
+    }
+
+    player->stopped = true;
     return true;
 }
 
@@ -269,7 +292,8 @@ Player_State player_get_state(const Player *player)
 {
     const ma_sound *sound = player_get_sound_const(player);
 
-    if (sound == NULL) return PLAYER_STOPPED;
+    if (sound == NULL) return PLAYER_EMPTY;
+    if (player->stopped) return PLAYER_STOPPED;
     if (ma_sound_at_end(sound)) return PLAYER_FINISHED;
     if (ma_sound_is_playing(sound)) return PLAYER_PLAYING;
 

@@ -14,11 +14,13 @@
 
 static char *trim(char *text)
 {
-    while (isspace((unsigned char)*text)) ++text;
+    while (isspace((unsigned char)*text))
+        ++text;
 
     char *end = text + strlen(text);
 
-    while (end > text && isspace((unsigned char)end[-1])) --end;
+    while (end > text && isspace((unsigned char)end[-1]))
+        --end;
 
     *end = '\0';
     return text;
@@ -28,6 +30,7 @@ void app_config_defaults(App_Config *config)
 {
     *config = (App_Config){
         .playlist_button_on_side = true,
+        .global_media_keys = true,
     };
 }
 
@@ -40,8 +43,7 @@ bool app_config_default_path(char *path, size_t capacity)
     if (config_home != NULL) {
         written = snprintf(path, capacity, "%s/mp/config.toml", config_home);
     } else if (home != NULL) {
-        written =
-            snprintf(path, capacity, "%s/.config/mp/config.toml", home);
+        written = snprintf(path, capacity, "%s/.config/mp/config.toml", home);
 #ifdef _WIN32
     } else {
         char *app_data = fs_environment("APPDATA");
@@ -108,12 +110,20 @@ App_Config_Load_Result app_config_load(const char *path, App_Config *config)
             value = trim(value);
         }
 
-        if (strcmp(key, "playlist_button_on_side") != 0) continue;
+        bool *setting = NULL;
+
+        if (strcmp(key, "playlist_button_on_side") == 0) {
+            setting = &loaded.playlist_button_on_side;
+        } else if (strcmp(key, "global_media_keys") == 0) {
+            setting = &loaded.global_media_keys;
+        } else {
+            continue;
+        }
 
         if (strcmp(value, "true") == 0) {
-            loaded.playlist_button_on_side = true;
+            *setting = true;
         } else if (strcmp(value, "false") == 0) {
-            loaded.playlist_button_on_side = false;
+            *setting = false;
         } else {
             valid = false;
         }
@@ -152,9 +162,11 @@ bool app_config_save(const char *path, const App_Config *config)
     bool success = file != NULL;
 
     if (success) {
-        success = fprintf(file, "playlist_button_on_side = %s\n",
-                          config->playlist_button_on_side ? "true" : "false") >
-                  0;
+        success =
+            fprintf(file, "playlist_button_on_side = %s\n",
+                    config->playlist_button_on_side ? "true" : "false") > 0 &&
+            fprintf(file, "global_media_keys = %s\n",
+                    config->global_media_keys ? "true" : "false") > 0;
         if (fclose(file) != 0) success = false;
     }
 
