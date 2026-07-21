@@ -24,9 +24,9 @@ mp it's a simple, faster, and usefull music player.
 
 ## download mp!
 
-- Windows: [latest-installer](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-windows-x86_64-setup.exe), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-windows-x86_64.zip).
-- Linux: [AppImage](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-linux-x86_64.AppImage), [Debian package](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-linux-x86_64.deb), [RPM](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-linux-x86_64.rpm), [Arch linux AUR](https://aur.archlinux.org/packages/mp-player-bin), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-linux-x86_64.tar.gz).
-- MacOS: [DMG](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-macos-arm64.dmg), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.0/mp-0.2.0-macos-arm64.tar.gz).
+- Windows: [latest-installer](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64-setup.exe), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64.zip).
+- Linux: [AppImage](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.AppImage), [Debian package](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.deb), [RPM](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.rpm), [Arch linux AUR](https://aur.archlinux.org/packages/mp-player-bin), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.tar.gz).
+- MacOS: [DMG](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.dmg), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.tar.gz).
 
 ## build from source
 

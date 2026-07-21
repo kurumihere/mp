@@ -17,6 +17,9 @@
   <launchable type="desktop-id">io.github.kurumihere.mp.desktop</launchable>
   <url type="homepage">https://github.com/kurumihere/mp</url>
   <url type="bugtracker">https://github.com/kurumihere/mp/issues</url>
+  <releases>
+    <release version="0.2.1" date="2026-07-22"/>
+  </releases>
   <provides>
     <binary>mp</binary>
   </provides>

@@ -29,7 +29,7 @@
 #include "ui_theme.h"
 
 #define CONFIG_PATH_SIZE 4096
-#define MP_VERSION "0.2.0"
+#define MP_VERSION "0.2.1"
 #define SIDE_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
