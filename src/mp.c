@@ -1094,8 +1094,8 @@ static void draw_setting_toggle(Rectangle option, const char *label,
 
 static void draw_settings_panel(const Ui_Layout *layout,
                                 bool playlist_button_on_side,
-                                bool global_media_keys, Vector2 mouse,
-                                const Ui_Theme *theme)
+                                bool global_media_keys, bool save_session,
+                                Vector2 mouse, const Ui_Theme *theme)
 {
     Rectangle panel = layout->settings_panel;
 
@@ -1111,6 +1111,8 @@ static void draw_settings_panel(const Ui_Layout *layout,
     draw_setting_toggle(layout->settings_global_media_keys, "Global media keys",
                         "Global media", "keys", global_media_keys, mouse,
                         layout->scale, theme);
+    draw_setting_toggle(layout->settings_save_session, "Save session", "Save",
+                        "session", save_session, mouse, layout->scale, theme);
 }
 
 static void draw_playlist_toggle(Rectangle bounds, bool open,
@@ -1243,7 +1245,7 @@ static int mp_main(int argc, char **argv)
         session_default_path(session_path, sizeof(session_path));
     bool session_loaded = false;
 
-    if (session_path_available) {
+    if (session_path_available && app_config.save_session) {
         session_loaded = session_load(session_path, &playlist,
                                       &session_state) == SESSION_LOAD_OK;
     }
@@ -1867,6 +1869,18 @@ static int mp_main(int argc, char **argv)
 
             mp_log(INFO, "global media keys: %s",
                    app_config.global_media_keys ? "enabled" : "disabled");
+        }
+
+        if (settings_panel_visible &&
+            button_pressed(layout.settings_save_session, mouse, true)) {
+            app_config.save_session = !app_config.save_session;
+
+            if (config_path_available) {
+                app_config_save(config_path, &app_config);
+            }
+
+            mp_log(INFO, "save session: %s",
+                   app_config.save_session ? "enabled" : "disabled");
         }
 
         size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
@@ -2673,7 +2687,8 @@ static int mp_main(int argc, char **argv)
 
         if (settings_panel_visible) {
             draw_settings_panel(&layout, playlist_button_on_side,
-                                app_config.global_media_keys, mouse, theme);
+                                app_config.global_media_keys,
+                                app_config.save_session, mouse, theme);
         }
 
         if (playlist_toggle_visible) {
@@ -2689,7 +2704,7 @@ static int mp_main(int argc, char **argv)
         EndDrawing();
     }
 
-    if (session_path_available) {
+    if (session_path_available && app_config.save_session) {
         size_t count = playlist_get_count(&playlist);
 
         Session_State saved_state = {

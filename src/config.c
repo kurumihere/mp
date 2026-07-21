@@ -31,6 +31,7 @@ void app_config_defaults(App_Config *config)
     *config = (App_Config){
         .playlist_button_on_side = true,
         .global_media_keys = true,
+        .save_session = true,
     };
 }
 
@@ -116,6 +117,8 @@ App_Config_Load_Result app_config_load(const char *path, App_Config *config)
             setting = &loaded.playlist_button_on_side;
         } else if (strcmp(key, "global_media_keys") == 0) {
             setting = &loaded.global_media_keys;
+        } else if (strcmp(key, "save_session") == 0) {
+            setting = &loaded.save_session;
         } else {
             continue;
         }
@@ -166,7 +169,9 @@ bool app_config_save(const char *path, const App_Config *config)
             fprintf(file, "playlist_button_on_side = %s\n",
                     config->playlist_button_on_side ? "true" : "false") > 0 &&
             fprintf(file, "global_media_keys = %s\n",
-                    config->global_media_keys ? "true" : "false") > 0;
+                    config->global_media_keys ? "true" : "false") > 0 &&
+            fprintf(file, "save_session = %s\n",
+                    config->save_session ? "true" : "false") > 0;
         if (fclose(file) != 0) success = false;
     }
 

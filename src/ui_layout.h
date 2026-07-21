@@ -43,6 +43,7 @@ typedef struct {
     Rectangle settings_panel;
     Rectangle settings_playlist_side;
     Rectangle settings_global_media_keys;
+    Rectangle settings_save_session;
     Rectangle playlist_toggle;
     Rectangle playlist_toggle_reveal;
 } Ui_Layout;

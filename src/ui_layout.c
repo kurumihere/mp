@@ -207,6 +207,14 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
                 settings_option_width,
                 settings_option_height,
             },
+        .settings_save_session =
+            {
+                settings_option_x,
+                settings_option_y +
+                    (settings_option_height + settings_option_gap) * 2.0f,
+                settings_option_width,
+                settings_option_height,
+            },
         .playlist_toggle = {toggle_x, ((float)height - toggle_height) / 2.0f,
                             toggle_width, toggle_height},
     };
@@ -261,6 +269,7 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
         snap_rectangle(layout.settings_playlist_side);
     layout.settings_global_media_keys =
         snap_rectangle(layout.settings_global_media_keys);
+    layout.settings_save_session = snap_rectangle(layout.settings_save_session);
     layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
     layout.playlist_toggle_reveal =
         snap_rectangle(layout.playlist_toggle_reveal);
