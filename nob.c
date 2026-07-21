@@ -17,6 +17,7 @@ typedef enum {
 typedef struct {
     Platform platform;
     const char *cc;
+    const char *cxx;
     const char *executable;
     const char *object_dir;
     const char *runner;
@@ -85,6 +86,7 @@ static const char *app_sources[] = {
     "src/svg.c",
     "src/log.c",
     "src/media_keys.c",
+    "src/media_session.c",
     "src/player.c",
     "src/playback_order.c",
     "src/playlist.c",
@@ -238,10 +240,12 @@ static Build configure_build(bool wine)
 {
     Build build = {0};
     build.cc = environment_tool("CC");
+    build.cxx = environment_tool("CXX");
 
     if (wine) {
         build.platform = MP_PLATFORM_WINDOWS;
         if (build.cc == NULL) build.cc = "x86_64-w64-mingw32-cc";
+        if (build.cxx == NULL) build.cxx = "x86_64-w64-mingw32-c++";
         build.executable = "build/mp.exe";
         build.object_dir = "build/obj/windows";
         build.runner = "wine";
@@ -274,32 +278,41 @@ static void append_compiler(Cmd *cmd, const Build *build)
     }
 }
 
+static void append_cxx_compiler(Cmd *cmd, const Build *build)
+{
+    cmd_append(cmd, build->cxx == NULL ? "c++" : build->cxx);
+}
+
 static void append_platform_options(Cmd *cmd, Platform platform)
 {
     if (platform == MP_PLATFORM_WINDOWS) {
         cmd_append(cmd, "-mwindows", "-lopengl32", "-lgdi32", "-lwinmm",
-                   "-lshell32", "-ladvapi32", "-lcomdlg32", "-lole32");
+                   "-lshell32", "-ladvapi32", "-lcomdlg32", "-lole32",
+                   "-lruntimeobject", "-lstdc++");
     } else if (platform == MP_PLATFORM_MACOS) {
         cmd_append(cmd, "-framework", "OpenGL", "-framework", "Cocoa",
                    "-framework", "IOKit", "-framework", "CoreAudio",
-                   "-framework", "CoreVideo", "-framework", "CoreFoundation");
+                   "-framework", "CoreVideo", "-framework", "CoreFoundation",
+                   "-framework", "MediaPlayer");
     } else {
         cmd_append(cmd, "-lGL", "-lm", "-lpthread", "-ldl", "-lrt", "-lX11");
     }
 }
 
-static void append_compile_options(Cmd *cmd, Platform platform)
+static void append_compile_options(Cmd *cmd, Platform platform, bool cxx)
 {
-    cmd_append(cmd, "-std=c11", "-g", "-Wall", "-Wextra",
+    cmd_append(cmd, cxx ? "-std=c++17" : "-std=c11", "-g", "-Wall", "-Wextra",
                "-Wno-unused-parameter", "-Wno-sign-compare", "-Wno-format",
                "-Wno-missing-braces", "-Wno-missing-field-initializers",
-               "-fno-strict-aliasing", "-Werror=implicit-function-declaration",
-               "-DPLATFORM_DESKTOP_GLFW", "-DGRAPHICS_API_OPENGL_33",
-               "-DSUPPORT_MODULE_RMODELS=0", "-DSUPPORT_MODULE_RAUDIO=0",
-               "-DSUPPORT_FILEFORMAT_JPG=1", "-I", "thirdparty/raylib/src",
-               "-I", "thirdparty/raylib/src/external/glfw/include", "-I",
+               "-fno-strict-aliasing", "-DPLATFORM_DESKTOP_GLFW",
+               "-DGRAPHICS_API_OPENGL_33", "-DSUPPORT_MODULE_RMODELS=0",
+               "-DSUPPORT_MODULE_RAUDIO=0", "-DSUPPORT_FILEFORMAT_JPG=1", "-I",
+               "thirdparty/raylib/src", "-I",
+               "thirdparty/raylib/src/external/glfw/include", "-I",
                "thirdparty/miniaudio", "-I", "thirdparty/nanosvg", "-I",
                "thirdparty", "-I", "src");
+
+    if (!cxx) cmd_append(cmd, "-Werror=implicit-function-declaration");
 
     if (platform == MP_PLATFORM_LINUX) {
         cmd_append(cmd, "-D_GLFW_X11");
@@ -319,14 +332,22 @@ static bool compile_source(const Build *build, const char *source,
                            Procs *procs, size_t jobs)
 {
     Cmd cmd = {0};
-    append_compiler(&cmd, build);
-    append_compile_options(&cmd, build->platform);
+    bool cxx = build->platform == MP_PLATFORM_WINDOWS &&
+               strcmp(source, "src/media_session.c") == 0;
+
+    if (cxx) {
+        append_cxx_compiler(&cmd, build);
+    } else {
+        append_compiler(&cmd, build);
+    }
+    append_compile_options(&cmd, build->platform, cxx);
     da_append_many(&cmd, platform_compile_options->items,
                    platform_compile_options->count);
 
     if (build->platform == MP_PLATFORM_MACOS &&
         (strcmp(source, "thirdparty/raylib/src/rglfw.c") == 0 ||
-         strcmp(source, "src/media_keys.c") == 0)) {
+         strcmp(source, "src/media_keys.c") == 0 ||
+         strcmp(source, "src/media_session.c") == 0)) {
         cmd_append(&cmd, "-x", "objective-c");
     }
 

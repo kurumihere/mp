@@ -12,6 +12,7 @@
 #include "log.h"
 #include "m3u.h"
 #include "media_keys.h"
+#include "media_session.h"
 #include "metadata.h"
 #include "playback_order.h"
 #include "player.h"
@@ -1151,6 +1152,9 @@ static int mp_main(int argc, char **argv)
     bool open_menu_visible = false;
     Vector2 open_menu_center = {0};
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
+    Media_Session media_session;
+    bool media_session_available =
+        media_session_init(&media_session, GetWindowHandle());
 
     while (!WindowShouldClose()) {
         float ui_frame_time = GetFrameTime();
@@ -1389,6 +1393,13 @@ static int mp_main(int argc, char **argv)
         bool alt_down = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
         unsigned int media_keys =
             media_keys_poll(IsWindowFocused(), app_config.global_media_keys);
+        Media_Session_Event media_session_event =
+            media_session_poll(&media_session);
+
+        if (media_session_available) {
+            media_keys &=
+                MEDIA_KEY_VOLUME_UP | MEDIA_KEY_VOLUME_DOWN | MEDIA_KEY_MUTE;
+        }
         bool search_changed = false;
 
         if (playlist_panel_visible) {
@@ -1787,7 +1798,19 @@ static int mp_main(int argc, char **argv)
             open_menu_visible = false;
         }
 
-        if (repeat_pressed) {
+        if (media_session_event.repeat_requested) {
+            switch (media_session_event.repeat) {
+            case MEDIA_SESSION_REPEAT_NONE:
+                repeat_mode = REPEAT_OFF;
+                break;
+            case MEDIA_SESSION_REPEAT_TRACK:
+                repeat_mode = REPEAT_ONE;
+                break;
+            case MEDIA_SESSION_REPEAT_PLAYLIST:
+                repeat_mode = REPEAT_ALL;
+                break;
+            }
+        } else if (repeat_pressed) {
             switch (repeat_mode) {
             case REPEAT_OFF:
                 repeat_mode = REPEAT_ALL;
@@ -1804,8 +1827,10 @@ static int mp_main(int argc, char **argv)
             }
         }
 
-        if (shuffle_pressed) {
-            bool enabled = !shuffle_enabled;
+        if (shuffle_pressed || media_session_event.shuffle_requested) {
+            bool enabled = media_session_event.shuffle_requested
+                               ? media_session_event.shuffle
+                               : !shuffle_enabled;
 
             if (!playback_order_set_shuffled(
                     &playback_order, playlist_get_current(&playlist), enabled,
@@ -1826,7 +1851,10 @@ static int mp_main(int argc, char **argv)
             has_track && playback_order_can_next(&playback_order, repeat_all);
 
         if (!seek_dragging &&
-            (((media_keys & MEDIA_KEY_NEXT) != 0 && can_next) ||
+            ((((media_keys & MEDIA_KEY_NEXT) != 0 ||
+               (media_session_event.commands & MEDIA_SESSION_COMMAND_NEXT) !=
+                   0) &&
+              can_next) ||
              (!playlist_search_focused && shift_down &&
               IsKeyPressed(KEY_RIGHT) && can_next) ||
              button_pressed(layout.next_button, mouse,
@@ -1836,7 +1864,10 @@ static int mp_main(int argc, char **argv)
         }
 
         if (!seek_dragging &&
-            (((media_keys & MEDIA_KEY_PREVIOUS) != 0 && can_previous) ||
+            ((((media_keys & MEDIA_KEY_PREVIOUS) != 0 ||
+               (media_session_event.commands &
+                MEDIA_SESSION_COMMAND_PREVIOUS) != 0) &&
+              can_previous) ||
              (!playlist_search_focused && shift_down &&
               IsKeyPressed(KEY_LEFT) && can_previous) ||
              button_pressed(layout.previous_button, mouse,
@@ -1845,9 +1876,18 @@ static int mp_main(int argc, char **argv)
                                 &metadata);
         }
 
+        state = player_get_state(&player);
+        bool session_toggle =
+            (media_session_event.commands & MEDIA_SESSION_COMMAND_TOGGLE) !=
+                0 ||
+            ((media_session_event.commands & MEDIA_SESSION_COMMAND_PLAY) != 0 &&
+             state != PLAYER_PLAYING) ||
+            ((media_session_event.commands & MEDIA_SESSION_COMMAND_PAUSE) !=
+                 0 &&
+             state == PLAYER_PLAYING);
         bool toggle_requested =
             has_track && !seek_dragging &&
-            (((media_keys & MEDIA_KEY_PLAY_PAUSE) != 0) ||
+            (session_toggle || ((media_keys & MEDIA_KEY_PLAY_PAUSE) != 0) ||
              (!playlist_search_focused &&
               (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_P))) ||
              button_pressed(layout.play_button, mouse, !sidebar_blocks_mouse));
@@ -1857,7 +1897,11 @@ static int mp_main(int argc, char **argv)
             break;
         }
 
-        if (has_track && !seek_dragging && (media_keys & MEDIA_KEY_STOP) != 0 &&
+        bool stop_requested =
+            (media_keys & MEDIA_KEY_STOP) != 0 ||
+            (media_session_event.commands & MEDIA_SESSION_COMMAND_STOP) != 0;
+
+        if (has_track && !seek_dragging && stop_requested &&
             !player_stop(&player)) {
             exit_code = 1;
             break;
@@ -1881,6 +1925,10 @@ static int mp_main(int argc, char **argv)
 
         if (volume_change != 0.0f) {
             player_adjust_volume(&player, volume_change);
+        }
+
+        if (has_track && media_session_event.volume_requested) {
+            player_set_volume(&player, (float)media_session_event.volume);
         }
 
         float volume_padding = snap_pixel(4.0f * layout.scale);
@@ -1918,6 +1966,21 @@ static int mp_main(int argc, char **argv)
         float cursor = player_get_cursor(&player);
         float length = player_get_length(&player);
         float keyboard_seek = 0.0f;
+
+        if (has_track && !seek_dragging && media_session_event.seek_requested) {
+            float requested_position = (float)media_session_event.seek_position;
+
+            if (requested_position < 0.0f) requested_position = 0.0f;
+            if (length > 0.0f && requested_position > length) {
+                requested_position = length;
+            }
+
+            if (!player_seek(&player, requested_position)) {
+                exit_code = 1;
+                break;
+            }
+            cursor = requested_position;
+        }
 
         if (has_track && !playlist_search_focused && !seek_dragging &&
             !control_down && IsKeyPressed(KEY_X)) {
@@ -1999,6 +2062,38 @@ static int mp_main(int argc, char **argv)
                 : playlist_get(&playlist, playlist_get_current(&playlist));
         album_art_update(&album_art, album_art_path);
         album_art_advance(&album_art, ui_frame_time);
+        bool session_repeat_all = repeat_mode == REPEAT_ALL;
+        bool session_can_previous =
+            has_track &&
+            playback_order_can_previous(&playback_order, session_repeat_all);
+        bool session_can_next =
+            has_track &&
+            playback_order_can_next(&playback_order, session_repeat_all);
+        Media_Session_Playback session_playback = MEDIA_SESSION_EMPTY;
+
+        if (state == PLAYER_PLAYING) {
+            session_playback = MEDIA_SESSION_PLAYING;
+        } else if (state == PLAYER_PAUSED) {
+            session_playback = MEDIA_SESSION_PAUSED;
+        } else if (has_track) {
+            session_playback = MEDIA_SESSION_STOPPED;
+        }
+
+        Media_Session_Repeat session_repeat = MEDIA_SESSION_REPEAT_NONE;
+
+        if (repeat_mode == REPEAT_ONE) {
+            session_repeat = MEDIA_SESSION_REPEAT_TRACK;
+        } else if (repeat_mode == REPEAT_ALL) {
+            session_repeat = MEDIA_SESSION_REPEAT_PLAYLIST;
+        }
+
+        media_session_update(
+            &media_session, album_art_path, has_track ? &metadata : NULL,
+            session_playback, player_get_cursor(&player),
+            player_get_length(&player),
+            player_is_muted(&player) ? 0.0 : player_get_volume(&player),
+            session_can_previous, session_can_next, shuffle_enabled,
+            session_repeat);
         const char *status;
 
         switch (state) {
@@ -2271,6 +2366,7 @@ static int mp_main(int argc, char **argv)
     }
 
     album_art_clear(&album_art);
+    media_session_uninit(&media_session);
     ui_icon_transition_uninit(&icon_transition);
     UnloadTexture(application_icon);
     ui_font_uninit();
