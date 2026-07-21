@@ -145,6 +145,8 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
                     44.0f, 68.0f));
     float playlist_item_gap =
         snap_pixel(clamp_float(4.0f * panel_scale, 3.0f, 7.0f));
+    float tab_x = panel_x + panel_inner;
+    float tab_width = (panel_width - panel_inner * 2.0f) / 2.0f;
     float settings_option_height =
         snap_pixel(clamp_float(64.0f * scale, 52.0f, 88.0f));
     float settings_option_gap = snap_pixel(10.0f * scale);
@@ -182,6 +184,8 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
         .album_art = album_art,
         .spectrum = spectrum,
         .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
+        .playlist_tab = {tab_x, panel_y, tab_width, header_height},
+        .folders_tab = {tab_x + tab_width, panel_y, tab_width, header_height},
         .playlist_viewport = {panel_x + panel_inner, playlist_top,
                               panel_width - panel_inner * 2.0f,
                               playlist_bottom - playlist_top},
@@ -247,6 +251,8 @@ Ui_Layout ui_layout_make(int width, int height, float side_panel_open_amount,
     layout.album_art = snap_rectangle(layout.album_art);
     layout.spectrum = snap_rectangle(layout.spectrum);
     layout.playlist_panel = snap_rectangle(layout.playlist_panel);
+    layout.playlist_tab = snap_rectangle(layout.playlist_tab);
+    layout.folders_tab = snap_rectangle(layout.folders_tab);
     layout.playlist_viewport = snap_rectangle(layout.playlist_viewport);
     layout.playlist_search = snap_rectangle(layout.playlist_search);
     layout.playlist_open = snap_rectangle(layout.playlist_open);

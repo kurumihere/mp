@@ -22,7 +22,8 @@ static void unload_icon_set(Ui_Icon_Set *icons)
     *icons = (Ui_Icon_Set){0};
 }
 
-static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
+static void draw_texture_icon(Texture2D texture, Rectangle bounds,
+                              float rotation, Color tint)
 {
     float size = bounds.width;
     Rectangle source = {0.0f, 0.0f, (float)texture.width,
@@ -31,7 +32,7 @@ static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
                              bounds.y + bounds.height / 2.0f, size, size};
     Vector2 origin = {size / 2.0f, size / 2.0f};
 
-    DrawTexturePro(texture, source, destination, origin, 0.0f, tint);
+    DrawTexturePro(texture, source, destination, origin, rotation, tint);
 }
 
 bool ui_application_icon_load(Texture2D *texture)
@@ -75,7 +76,7 @@ bool ui_application_icon_load(Texture2D *texture)
 
 void ui_application_icon_draw(Texture2D texture, Rectangle bounds)
 {
-    draw_texture_icon(texture, bounds, WHITE);
+    draw_texture_icon(texture, bounds, 0.0f, WHITE);
 }
 
 static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
@@ -213,19 +214,27 @@ static float transition_amount(const Ui_Icon_Transition *transition)
 void ui_icon_transition_draw(const Ui_Icon_Transition *transition, Ui_Icon icon,
                              Rectangle bounds, float opacity)
 {
+    ui_icon_transition_draw_rotated(transition, icon, bounds, 0.0f, opacity);
+}
+
+void ui_icon_transition_draw_rotated(const Ui_Icon_Transition *transition,
+                                     Ui_Icon icon, Rectangle bounds,
+                                     float rotation, float opacity)
+{
     if (icon < 0 || icon >= UI_ICON_COUNT) return;
 
     Texture2D current = transition->current.textures[icon];
 
     if (!transition->active) {
-        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
+        draw_texture_icon(current, bounds, rotation, Fade(WHITE, opacity));
         return;
     }
 
     float amount = transition_amount(transition);
     Texture2D next = transition->next.textures[icon];
-    draw_texture_icon(current, bounds, Fade(WHITE, opacity * (1.0f - amount)));
-    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
+    draw_texture_icon(current, bounds, rotation,
+                      Fade(WHITE, opacity * (1.0f - amount)));
+    draw_texture_icon(next, bounds, rotation, Fade(WHITE, opacity * amount));
 }
 
 void ui_icon_transition_uninit(Ui_Icon_Transition *transition)

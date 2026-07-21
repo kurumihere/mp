@@ -45,6 +45,9 @@ void ui_icon_transition_update(Ui_Icon_Transition *transition,
                                float delta_time);
 void ui_icon_transition_draw(const Ui_Icon_Transition *transition, Ui_Icon icon,
                              Rectangle bounds, float opacity);
+void ui_icon_transition_draw_rotated(const Ui_Icon_Transition *transition,
+                                     Ui_Icon icon, Rectangle bounds,
+                                     float rotation, float opacity);
 void ui_icon_transition_uninit(Ui_Icon_Transition *transition);
 
 #endif

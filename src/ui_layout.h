@@ -35,6 +35,8 @@ typedef struct {
     Rectangle album_art;
     Rectangle spectrum;
     Rectangle playlist_panel;
+    Rectangle playlist_tab;
+    Rectangle folders_tab;
     Rectangle playlist_viewport;
     Rectangle playlist_search;
     Rectangle playlist_open;
