@@ -77,6 +77,7 @@ static const Asset_Source asset_sources[] = {
 static const char *app_sources[] = {
     GENERATED_ASSETS_SOURCE,
     "src/mp.c",
+    "src/file_picker.c",
     "src/fs.c",
     "src/font_renderer.c",
     "src/config.c",
