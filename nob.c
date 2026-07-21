@@ -80,6 +80,7 @@ static const char *app_sources[] = {
     "src/album_art.c",
     "src/file_picker.c",
     "src/ui_font.c",
+    "src/ui_icons.c",
     "src/ui_theme.c",
     "src/fs.c",
     "src/font_renderer.c",

@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "album_art.h"
-#include "assets.h"
 #include "config.h"
 #include "file_picker.h"
 #include "fs.h"
@@ -20,9 +19,9 @@
 #include "raylib.h"
 #include "session.h"
 #include "spectrum.h"
-#include "svg.h"
 #include "theme.h"
 #include "ui_font.h"
+#include "ui_icons.h"
 #include "ui_theme.h"
 
 #define CONFIG_PATH_SIZE 4096
@@ -34,8 +33,6 @@
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
 #define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
-#define UI_BUTTON_ICON_SIZE 72
-#define UI_TOGGLE_ICON_SIZE 48
 #define WINDOW_HEIGHT 700
 #define WINDOW_MIN_HEIGHT 480
 #define WINDOW_MIN_WIDTH 640
@@ -298,18 +295,6 @@ static bool button_pressed(Rectangle bounds, Vector2 mouse, bool enabled)
 }
 
 typedef enum {
-    BUTTON_PREVIOUS,
-    BUTTON_PLAY,
-    BUTTON_PAUSE,
-    BUTTON_NEXT,
-    BUTTON_REPEAT,
-    BUTTON_REPEAT_ONE,
-    BUTTON_SHUFFLE,
-    BUTTON_PLAYLIST,
-    BUTTON_SETTINGS,
-} Button_Icon;
-
-typedef enum {
     REPEAT_OFF,
     REPEAT_ALL,
     REPEAT_ONE,
@@ -342,29 +327,6 @@ static void request_side_panel(Side_Panel target, Side_Panel *side_panel,
     *animated_side_panel = target;
     *queued_side_panel = SIDE_PANEL_NONE;
 }
-
-typedef struct {
-    Texture2D back;
-    Texture2D forward;
-    Texture2D pause;
-    Texture2D play;
-    Texture2D repeat;
-    Texture2D repeat_one;
-    Texture2D shuffle;
-    Texture2D playlist;
-    Texture2D settings;
-    Texture2D playlist_back;
-    Texture2D playlist_forward;
-} Ui_Icons;
-
-typedef struct {
-    Ui_Icons current;
-    Ui_Icons next;
-    System_Theme current_theme;
-    System_Theme target_theme;
-    float progress;
-    bool active;
-} Ui_Icon_Transition;
 
 typedef struct {
     float scale;
@@ -410,199 +372,6 @@ typedef struct {
     Rectangle files;
     Rectangle folder;
 } Open_Menu_Layout;
-
-static void unload_ui_icons(Ui_Icons *icons)
-{
-    Texture2D *textures[] = {
-        &icons->back,     &icons->forward,       &icons->pause,
-        &icons->play,     &icons->repeat,        &icons->repeat_one,
-        &icons->shuffle,  &icons->playlist,      &icons->settings,
-        &icons->playlist_back, &icons->playlist_forward,
-    };
-
-    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
-        if (IsTextureValid(*textures[i])) UnloadTexture(*textures[i]);
-    }
-
-    *icons = (Ui_Icons){0};
-}
-
-static bool load_application_icon(Texture2D *texture)
-{
-    Embedded_Asset asset = asset_get(ASSET_ICON_PNG);
-
-    if (asset.data == NULL || asset.size > INT_MAX) {
-        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
-        return false;
-    }
-
-    Image icon = LoadImageFromMemory(".png", asset.data, (int)asset.size);
-
-    if (!IsImageValid(icon)) {
-        mp_log(ERROR, "failed to load application icon: %s", asset.name);
-        return false;
-    }
-
-    ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-
-    if (!IsImageValid(icon) ||
-        icon.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
-        mp_log(ERROR, "failed to convert application icon: %s", asset.name);
-        UnloadImage(icon);
-        return false;
-    }
-
-    SetWindowIcon(icon);
-    *texture = LoadTextureFromImage(icon);
-    UnloadImage(icon);
-
-    if (!IsTextureValid(*texture)) {
-        mp_log(ERROR, "failed to create application icon texture");
-        return false;
-    }
-
-    GenTextureMipmaps(texture);
-    SetTextureFilter(*texture, TEXTURE_FILTER_TRILINEAR);
-    return true;
-}
-
-static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
-{
-    Embedded_Asset asset = asset_get(id);
-
-    if (asset.data == NULL) {
-        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
-        return (Texture2D){0};
-    }
-
-    return svg_load_texture(asset.name, asset.data, asset.size, size,
-                            content_scale);
-}
-
-static bool create_ui_icons(Ui_Icons *icons, System_Theme theme)
-{
-    bool dark = theme == SYSTEM_THEME_DARK;
-    Asset_Id back = dark ? ASSET_BACK_WHITE_SVG : ASSET_BACK_BLACK_SVG;
-    Asset_Id forward =
-        dark ? ASSET_FORWARD_WHITE_SVG : ASSET_FORWARD_BLACK_SVG;
-    Asset_Id pause = dark ? ASSET_PAUSE_WHITE_SVG : ASSET_PAUSE_BLACK_SVG;
-    Asset_Id play = dark ? ASSET_PLAY_WHITE_SVG : ASSET_PLAY_BLACK_SVG;
-    Asset_Id repeat = dark ? ASSET_REPEAT_WHITE_SVG : ASSET_REPEAT_BLACK_SVG;
-    Asset_Id repeat_one =
-        dark ? ASSET_REPEAT_ONE_WHITE_SVG : ASSET_REPEAT_ONE_BLACK_SVG;
-    Asset_Id shuffle =
-        dark ? ASSET_SHUFFLE_WHITE_SVG : ASSET_SHUFFLE_BLACK_SVG;
-    Asset_Id playlist =
-        dark ? ASSET_PLAYLIST_WHITE_SVG : ASSET_PLAYLIST_BLACK_SVG;
-    Asset_Id settings =
-        dark ? ASSET_SETTINGS_WHITE_SVG : ASSET_SETTINGS_BLACK_SVG;
-
-    *icons = (Ui_Icons){
-        .back = load_asset_texture(back, UI_BUTTON_ICON_SIZE, 0.74f),
-        .forward = load_asset_texture(forward, UI_BUTTON_ICON_SIZE, 0.74f),
-        .pause = load_asset_texture(pause, UI_BUTTON_ICON_SIZE, 0.72f),
-        .play = load_asset_texture(play, UI_BUTTON_ICON_SIZE, 0.72f),
-        .repeat = load_asset_texture(repeat, UI_BUTTON_ICON_SIZE, 0.68f),
-        .repeat_one =
-            load_asset_texture(repeat_one, UI_BUTTON_ICON_SIZE, 0.68f),
-        .shuffle = load_asset_texture(shuffle, UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist = load_asset_texture(playlist, UI_BUTTON_ICON_SIZE, 0.72f),
-        .settings = load_asset_texture(settings, UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist_back = load_asset_texture(back, UI_TOGGLE_ICON_SIZE, 0.88f),
-        .playlist_forward =
-            load_asset_texture(forward, UI_TOGGLE_ICON_SIZE, 0.88f),
-    };
-
-    Texture2D textures[] = {
-        icons->back,     icons->forward,       icons->pause,
-        icons->play,     icons->repeat,        icons->repeat_one,
-        icons->shuffle,  icons->playlist,      icons->settings,
-        icons->playlist_back, icons->playlist_forward,
-    };
-
-    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
-        if (!IsTextureValid(textures[i])) {
-            unload_ui_icons(icons);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool init_ui_icon_transition(Ui_Icon_Transition *transition,
-                                    System_Theme theme)
-{
-    *transition = (Ui_Icon_Transition){
-        .current_theme = theme,
-        .target_theme = theme,
-    };
-    return create_ui_icons(&transition->current, theme);
-}
-
-static bool begin_ui_icon_transition(Ui_Icon_Transition *transition,
-                                     System_Theme target)
-{
-    if (transition->active) {
-        if (target == transition->target_theme) return true;
-
-        if (target == transition->current_theme) {
-            Ui_Icons icons = transition->current;
-            transition->current = transition->next;
-            transition->next = icons;
-
-            System_Theme theme = transition->current_theme;
-            transition->current_theme = transition->target_theme;
-            transition->target_theme = theme;
-            transition->progress = 1.0f - transition->progress;
-            return true;
-        }
-    }
-
-    if (target == transition->current_theme) return true;
-
-    Ui_Icons next = {0};
-
-    if (!create_ui_icons(&next, target)) return false;
-
-    transition->next = next;
-    transition->target_theme = target;
-    transition->progress = 0.0f;
-    transition->active = true;
-    return true;
-}
-
-static void update_ui_icon_transition(Ui_Icon_Transition *transition,
-                                      float delta_time)
-{
-    if (!transition->active) return;
-
-    transition->progress += delta_time / UI_THEME_TRANSITION_SECONDS;
-
-    if (transition->progress < 1.0f) return;
-
-    unload_ui_icons(&transition->current);
-    transition->current = transition->next;
-    transition->next = (Ui_Icons){0};
-    transition->current_theme = transition->target_theme;
-    transition->progress = 0.0f;
-    transition->active = false;
-}
-
-static float ui_icon_transition_amount(const Ui_Icon_Transition *transition)
-{
-    if (!transition->active) return 0.0f;
-
-    float progress = transition->progress;
-    return progress * progress * (3.0f - 2.0f * progress);
-}
-
-static void unload_ui_icon_transition(Ui_Icon_Transition *transition)
-{
-    unload_ui_icons(&transition->current);
-    unload_ui_icons(&transition->next);
-    *transition = (Ui_Icon_Transition){0};
-}
 
 static float clamp_float(float value, float minimum, float maximum)
 {
@@ -1061,45 +830,7 @@ static Rectangle playlist_item_bounds(const Ui_Layout *layout,
     });
 }
 
-static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
-{
-    float size = bounds.width;
-    Rectangle source = {0.0f, 0.0f, (float)texture.width,
-                        (float)texture.height};
-    Rectangle destination = {bounds.x + bounds.width / 2.0f,
-                             bounds.y + bounds.height / 2.0f, size, size};
-    Vector2 origin = {size / 2.0f, size / 2.0f};
-
-    DrawTexturePro(texture, source, destination, origin, 0.0f, tint);
-}
-
-static Texture2D button_icon_texture(const Ui_Icons *icons, Button_Icon icon)
-{
-    switch (icon) {
-    case BUTTON_PREVIOUS:
-        return icons->back;
-    case BUTTON_PLAY:
-        return icons->play;
-    case BUTTON_PAUSE:
-        return icons->pause;
-    case BUTTON_NEXT:
-        return icons->forward;
-    case BUTTON_REPEAT:
-        return icons->repeat;
-    case BUTTON_REPEAT_ONE:
-        return icons->repeat_one;
-    case BUTTON_SHUFFLE:
-        return icons->shuffle;
-    case BUTTON_PLAYLIST:
-        return icons->playlist;
-    case BUTTON_SETTINGS:
-        return icons->settings;
-    }
-
-    return (Texture2D){0};
-}
-
-static void draw_button(Rectangle bounds, Button_Icon icon,
+static void draw_button(Rectangle bounds, Ui_Icon icon,
                         const Ui_Icon_Transition *icon_transition,
                         Vector2 mouse, bool enabled, bool active,
                         const Ui_Theme *theme)
@@ -1113,18 +844,7 @@ static void draw_button(Rectangle bounds, Button_Icon icon,
 
     DrawRectangleRec(bounds, fill);
 
-    Texture2D current =
-        button_icon_texture(&icon_transition->current, icon);
-
-    if (!icon_transition->active) {
-        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
-        return;
-    }
-
-    float amount = ui_icon_transition_amount(icon_transition);
-    Texture2D next = button_icon_texture(&icon_transition->next, icon);
-    draw_texture_icon(current, bounds, Fade(WHITE, opacity * (1.0f - amount)));
-    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
+    ui_icon_transition_draw(icon_transition, icon, bounds, opacity);
 }
 
 static bool format_track_details(const Track_Metadata *metadata, char *text,
@@ -1476,20 +1196,10 @@ static void draw_playlist_toggle(Rectangle bounds, bool open,
     Color fill = hovered ? theme->button_hover : theme->button;
 
     DrawRectangleRec(bounds, Fade(fill, opacity));
-    Texture2D current = open ? icon_transition->current.playlist_back
-                             : icon_transition->current.playlist_forward;
-
-    if (!icon_transition->active) {
-        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
-        return;
-    }
-
-    float amount = ui_icon_transition_amount(icon_transition);
-    Texture2D next = open ? icon_transition->next.playlist_back
-                          : icon_transition->next.playlist_forward;
-    draw_texture_icon(current, bounds,
-                      Fade(WHITE, opacity * (1.0f - amount)));
-    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
+    ui_icon_transition_draw(icon_transition,
+                            open ? UI_ICON_PLAYLIST_BACK
+                                 : UI_ICON_PLAYLIST_FORWARD,
+                            bounds, opacity);
 }
 
 typedef struct {
@@ -1688,7 +1398,7 @@ static int mp_main(int argc, char **argv)
     Ui_Icon_Transition icon_transition = {0};
     Texture2D application_icon = {0};
 
-    if (!load_application_icon(&application_icon)) {
+    if (!ui_application_icon_load(&application_icon)) {
         system_theme_monitor_uninit(&system_theme_monitor);
         CloseWindow();
         playlist_uninit(&playlist);
@@ -1707,7 +1417,7 @@ static int mp_main(int argc, char **argv)
         return 1;
     }
 
-    if (!init_ui_icon_transition(&icon_transition, system_theme)) {
+    if (!ui_icon_transition_init(&icon_transition, system_theme)) {
         system_theme_monitor_uninit(&system_theme_monitor);
         ui_font_uninit();
         UnloadTexture(application_icon);
@@ -1806,7 +1516,7 @@ static int mp_main(int argc, char **argv)
             System_Theme detected_theme =
                 system_theme_monitor_get(&system_theme_monitor);
 
-            if (begin_ui_icon_transition(&icon_transition, detected_theme)) {
+            if (ui_icon_transition_begin(&icon_transition, detected_theme)) {
                 system_theme = detected_theme;
                 ui_theme_transition_begin(&theme_transition, system_theme);
                 mp_log(INFO, "theme: %s",
@@ -1817,7 +1527,7 @@ static int mp_main(int argc, char **argv)
         }
 
         ui_theme_transition_update(&theme_transition, ui_frame_time);
-        update_ui_icon_transition(&icon_transition, ui_frame_time);
+        ui_icon_transition_update(&icon_transition, ui_frame_time);
 
         if (IsWindowResized()) {
             spectrum_resume_at =
@@ -2740,7 +2450,7 @@ static int mp_main(int argc, char **argv)
             int drop_hint_y = (int)snap_pixel(
                 (float)drop_title_y + drop_title_size + hint_gap);
 
-            draw_texture_icon(application_icon, icon_bounds, WHITE);
+            ui_application_icon_draw(application_icon, icon_bounds);
             ui_font_draw(drop_title, drop_title_x, drop_title_y,
                          drop_title_size, theme->text_primary);
             ui_font_draw(drop_hint, drop_hint_x, drop_hint_y, drop_hint_size,
@@ -2784,26 +2494,26 @@ static int mp_main(int argc, char **argv)
                              }),
                              handle_color);
 
-            draw_button(layout.shuffle_button, BUTTON_SHUFFLE,
+            draw_button(layout.shuffle_button, UI_ICON_SHUFFLE,
                         &icon_transition, mouse, true, shuffle_enabled, theme);
-            draw_button(layout.previous_button, BUTTON_PREVIOUS,
+            draw_button(layout.previous_button, UI_ICON_PREVIOUS,
                         &icon_transition, mouse, can_previous, false, theme);
             draw_button(layout.play_button,
-                        state == PLAYER_PLAYING ? BUTTON_PAUSE : BUTTON_PLAY,
+                        state == PLAYER_PLAYING ? UI_ICON_PAUSE : UI_ICON_PLAY,
                         &icon_transition, mouse, true, false, theme);
-            draw_button(layout.next_button, BUTTON_NEXT, &icon_transition,
+            draw_button(layout.next_button, UI_ICON_NEXT, &icon_transition,
                         mouse, can_next, false, theme);
             draw_button(layout.repeat_button,
-                        repeat_mode == REPEAT_ONE ? BUTTON_REPEAT_ONE
-                                                  : BUTTON_REPEAT,
+                        repeat_mode == REPEAT_ONE ? UI_ICON_REPEAT_ONE
+                                                  : UI_ICON_REPEAT,
                         &icon_transition, mouse, true,
                         repeat_mode != REPEAT_OFF, theme);
             if (!playlist_button_on_side) {
-                draw_button(layout.playlist_button, BUTTON_PLAYLIST,
+                draw_button(layout.playlist_button, UI_ICON_PLAYLIST,
                             &icon_transition, mouse, true,
                             side_panel == SIDE_PANEL_PLAYLIST, theme);
             }
-            draw_button(layout.settings_button, BUTTON_SETTINGS,
+            draw_button(layout.settings_button, UI_ICON_SETTINGS,
                         &icon_transition, mouse, true,
                         side_panel == SIDE_PANEL_SETTINGS, theme);
         }
@@ -2850,7 +2560,7 @@ static int mp_main(int argc, char **argv)
     }
 
     album_art_clear(&album_art);
-    unload_ui_icon_transition(&icon_transition);
+    ui_icon_transition_uninit(&icon_transition);
     UnloadTexture(application_icon);
     ui_font_uninit();
     file_picker_uninit(&file_picker);
