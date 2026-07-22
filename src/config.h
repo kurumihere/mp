@@ -12,6 +12,8 @@ typedef enum {
 
 typedef struct {
     bool playlist_button_on_side;
+    bool global_media_keys;
+    bool save_session;
 } App_Config;
 
 void app_config_defaults(App_Config *config);

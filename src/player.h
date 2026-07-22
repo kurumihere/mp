@@ -10,6 +10,7 @@
 #define PLAYER_ANALYSIS_BUFFER_SIZE (PLAYER_ANALYSIS_SAMPLE_COUNT * 2)
 
 typedef enum {
+    PLAYER_EMPTY,
     PLAYER_STOPPED,
     PLAYER_PLAYING,
     PLAYER_PAUSED,
@@ -24,6 +25,7 @@ typedef struct {
     int active_sound;
     float volume;
     bool muted;
+    bool stopped;
     ma_atomic_float analysis_samples[PLAYER_ANALYSIS_BUFFER_SIZE];
     ma_atomic_uint32 analysis_cursor;
     ma_atomic_uint32 analysis_channels;
@@ -36,6 +38,7 @@ void player_clear(Player *player);
 void player_uninit(Player *player);
 
 bool player_toggle(Player *player);
+bool player_stop(Player *player);
 bool player_seek(Player *player, float position);
 void player_set_volume(Player *player, float volume);
 void player_adjust_volume(Player *player, float amount);

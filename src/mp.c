@@ -1,17 +1,19 @@
 #include <limits.h>
 #include <math.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "assets.h"
+#include "album_art.h"
 #include "config.h"
+#include "file_picker.h"
+#include "folder_tree.h"
 #include "fs.h"
-#include "font_renderer.h"
 #include "log.h"
 #include "m3u.h"
+#include "media_keys.h"
+#include "media_session.h"
 #include "metadata.h"
 #include "playback_order.h"
 #include "player.h"
@@ -20,13 +22,14 @@
 #include "raylib.h"
 #include "session.h"
 #include "spectrum.h"
-#include "svg.h"
 #include "theme.h"
-#include "tinyfiledialogs/tinyfiledialogs.h"
-#include "worker_thread.h"
+#include "ui_font.h"
+#include "ui_icons.h"
+#include "ui_layout.h"
+#include "ui_theme.h"
 
 #define CONFIG_PATH_SIZE 4096
-#define MP_VERSION "0.2.0"
+#define MP_VERSION "0.2.1"
 #define SIDE_PANEL_ANIMATION_SPEED 14.0f
 #define PLAYLIST_TRACK_NONE ((size_t)-1)
 #define PLAYLIST_TOGGLE_ANIMATION_SPEED 18.0f
@@ -34,58 +37,20 @@
 #define SESSION_PATH_SIZE 4096
 #define SPECTRUM_DISPLAY_MAX_BARS 64
 #define SPECTRUM_RESIZE_SETTLE_SECONDS 0.15
-#define THEME_TRANSITION_SECONDS 0.5f
-#define UI_BUTTON_ICON_SIZE 72
-#define UI_TOGGLE_ICON_SIZE 48
 #define WINDOW_HEIGHT 700
 #define WINDOW_MIN_HEIGHT 480
 #define WINDOW_MIN_WIDTH 640
 #define WINDOW_WIDTH 1000
 
-typedef enum {
-    FONT_FACE_BASE,
-    FONT_FACE_JP,
-    FONT_FACE_KR,
-    FONT_FACE_TC,
-    FONT_FACE_COUNT,
-} Font_Face;
-
-typedef struct {
-    int *values;
-    int count;
-    int capacity;
-} Font_Codepoints;
-
-static const int font_sizes[] = {14, 16, 18, 20, 22,
-                                 24, 30, 40, 50, 60};
-#define FONT_COUNT ((int)(sizeof(font_sizes) / sizeof(font_sizes[0])))
-
-static Font fonts[FONT_COUNT];
-static Font_Renderer font_renderer;
-static Font_Codepoints font_codepoints[FONT_COUNT][FONT_FACE_COUNT];
-static Font_Codepoints font_unsupported[FONT_COUNT];
-static bool font_dirty[FONT_COUNT];
-
 #if PLAYER_ANALYSIS_SAMPLE_COUNT != SPECTRUM_SAMPLE_COUNT
 #error Player analysis and spectrum sample counts must match
 #endif
-
-static int compare_paths(const void *left, const void *right)
-{
-    const char *left_path = *(const char *const *)left;
-    const char *right_path = *(const char *const *)right;
-    return strcmp(left_path, right_path);
-}
 
 static bool append_directory(Playlist *playlist, const char *path)
 {
     Fs_Path_List files = {0};
 
     if (!fs_list_audio_files(path, &files)) return false;
-
-    if (files.count > 1) {
-        qsort(files.items, files.count, sizeof(*files.items), compare_paths);
-    }
 
     bool success = playlist_append(playlist, (const char *const *)files.items,
                                    files.count);
@@ -199,8 +164,9 @@ static bool add_inputs_to_player(Player *player, Playlist *playlist,
         return false;
     }
 
-    if (player_get_state(player) == PLAYER_STOPPED) {
-        for (size_t i = first_new_track; i < playlist_get_count(playlist); ++i) {
+    if (player_get_state(player) == PLAYER_EMPTY) {
+        for (size_t i = first_new_track; i < playlist_get_count(playlist);
+             ++i) {
             if (play_track(player, playlist, i, metadata)) {
                 *finished_handled = false;
                 break;
@@ -211,10 +177,10 @@ static bool add_inputs_to_player(Player *player, Playlist *playlist,
     return reset_playback_order(order, playlist, shuffled);
 }
 
-static bool add_file_picker_selection(
-    Player *player, Playlist *playlist, Playback_Order *order, bool shuffled,
-    char *selection, Track_Metadata *metadata, bool *finished_handled,
-    size_t *added)
+static bool add_file_picker_selection(Player *player, Playlist *playlist,
+                                      Playback_Order *order, bool shuffled,
+                                      char *selection, Track_Metadata *metadata,
+                                      bool *finished_handled, size_t *added)
 {
     size_t length = strlen(selection);
     size_t selected_count = 1;
@@ -225,8 +191,7 @@ static bool add_file_picker_selection(
 
     if (selected_count > SIZE_MAX / sizeof(char *)) return false;
 
-    char **selected_paths =
-        malloc(selected_count * sizeof(*selected_paths));
+    char **selected_paths = malloc(selected_count * sizeof(*selected_paths));
 
     if (selected_paths == NULL) return false;
 
@@ -241,9 +206,8 @@ static bool add_file_picker_selection(
     }
 
     bool result = add_inputs_to_player(
-        player, playlist, order, shuffled,
-        (const char *const *)selected_paths, selected_count, metadata,
-        finished_handled, added);
+        player, playlist, order, shuffled, (const char *const *)selected_paths,
+        selected_count, metadata, finished_handled, added);
     free(selected_paths);
     return result;
 }
@@ -255,8 +219,8 @@ static bool save_playlist_to_path(const Playlist *playlist,
     if (selected_path[0] == '\0') return false;
 
     const char *extension = m3u_is_path(selected_path) ? "" : ".m3u";
-    int written = snprintf(saved_path, saved_path_size, "%s%s", selected_path,
-                           extension);
+    int written =
+        snprintf(saved_path, saved_path_size, "%s%s", selected_path, extension);
 
     if (written < 0 || (size_t)written >= saved_path_size) return false;
 
@@ -323,18 +287,6 @@ static bool button_pressed(Rectangle bounds, Vector2 mouse, bool enabled)
 }
 
 typedef enum {
-    BUTTON_PREVIOUS,
-    BUTTON_PLAY,
-    BUTTON_PAUSE,
-    BUTTON_NEXT,
-    BUTTON_REPEAT,
-    BUTTON_REPEAT_ONE,
-    BUTTON_SHUFFLE,
-    BUTTON_PLAYLIST,
-    BUTTON_SETTINGS,
-} Button_Icon;
-
-typedef enum {
     REPEAT_OFF,
     REPEAT_ALL,
     REPEAT_ONE,
@@ -346,10 +298,14 @@ typedef enum {
     SIDE_PANEL_SETTINGS,
 } Side_Panel;
 
+typedef enum {
+    PLAYLIST_PANEL_TAB_PLAYLIST,
+    PLAYLIST_PANEL_TAB_FOLDERS,
+} Playlist_Panel_Tab;
+
 static void request_side_panel(Side_Panel target, Side_Panel *side_panel,
                                Side_Panel *animated_side_panel,
-                               Side_Panel *queued_side_panel,
-                               float animation)
+                               Side_Panel *queued_side_panel, float animation)
 {
     if (*side_panel == target) {
         *side_panel = SIDE_PANEL_NONE;
@@ -366,987 +322,6 @@ static void request_side_panel(Side_Panel target, Side_Panel *side_panel,
     *side_panel = target;
     *animated_side_panel = target;
     *queued_side_panel = SIDE_PANEL_NONE;
-}
-
-typedef enum {
-    FILE_PICKER_NONE,
-    FILE_PICKER_FILES,
-    FILE_PICKER_FOLDER,
-    FILE_PICKER_SAVE_FILE,
-} File_Picker_Mode;
-
-typedef enum {
-    FILE_PICKER_IDLE,
-    FILE_PICKER_RUNNING,
-    FILE_PICKER_COMPLETE,
-} File_Picker_State;
-
-typedef struct {
-    Worker_Thread thread;
-    atomic_int state;
-    File_Picker_Mode mode;
-    char *selection;
-    bool graphical;
-    bool failed;
-} File_Picker;
-
-static int file_picker_run(void *context)
-{
-    File_Picker *picker = context;
-    char *selection = NULL;
-
-    if (picker->mode == FILE_PICKER_FILES) {
-        const char *filters[] = {
-            "*.flac", "*.FLAC", "*.mp3",  "*.MP3", "*.wav",
-            "*.WAV",  "*.m3u",  "*.M3U", "*.m3u8", "*.M3U8",
-        };
-        int filter_count = (int)(sizeof(filters) / sizeof(filters[0]));
-
-        picker->graphical =
-            tinyfd_openFileDialog("tinyfd_query", "", filter_count, filters,
-                                  "Audio and playlist files", 1) != NULL;
-
-        if (picker->graphical) {
-            selection = tinyfd_openFileDialog(
-                "Open audio files", "", filter_count, filters,
-                "Audio and playlist files", 1);
-        }
-    } else if (picker->mode == FILE_PICKER_FOLDER) {
-        picker->graphical =
-            tinyfd_selectFolderDialog("tinyfd_query", "") != NULL;
-
-        if (picker->graphical) {
-            selection = tinyfd_selectFolderDialog("Open music folder", "");
-        }
-    } else if (picker->mode == FILE_PICKER_SAVE_FILE) {
-        const char *filters[] = {"*.m3u", "*.m3u8"};
-        int filter_count = (int)(sizeof(filters) / sizeof(filters[0]));
-
-        picker->graphical =
-            tinyfd_saveFileDialog("tinyfd_query", "playlist.m3u",
-                                  filter_count, filters,
-                                  "Playlist files") != NULL;
-
-        if (picker->graphical) {
-            selection = tinyfd_saveFileDialog(
-                "Save playlist", "playlist.m3u", filter_count, filters,
-                "Playlist files");
-        }
-    }
-
-    if (selection != NULL) {
-        size_t length = strlen(selection) + 1;
-        picker->selection = malloc(length);
-
-        if (picker->selection != NULL) {
-            memcpy(picker->selection, selection, length);
-        } else {
-            picker->failed = true;
-        }
-    }
-
-    atomic_store_explicit(&picker->state, FILE_PICKER_COMPLETE,
-                          memory_order_release);
-    return 0;
-}
-
-static void file_picker_init(File_Picker *picker)
-{
-    *picker = (File_Picker){0};
-    atomic_init(&picker->state, FILE_PICKER_IDLE);
-}
-
-static bool file_picker_start(File_Picker *picker, File_Picker_Mode mode)
-{
-    if (mode == FILE_PICKER_NONE ||
-        atomic_load_explicit(&picker->state, memory_order_acquire) !=
-            FILE_PICKER_IDLE) {
-        return false;
-    }
-
-    picker->mode = mode;
-    picker->selection = NULL;
-    picker->graphical = false;
-    picker->failed = false;
-    atomic_store_explicit(&picker->state, FILE_PICKER_RUNNING,
-                          memory_order_release);
-
-    if (!worker_thread_start(&picker->thread, file_picker_run, picker)) {
-        atomic_store_explicit(&picker->state, FILE_PICKER_IDLE,
-                              memory_order_release);
-        picker->mode = FILE_PICKER_NONE;
-        return false;
-    }
-
-    return true;
-}
-
-static bool file_picker_busy(const File_Picker *picker)
-{
-    return atomic_load_explicit(&picker->state, memory_order_acquire) !=
-           FILE_PICKER_IDLE;
-}
-
-static bool file_picker_take(File_Picker *picker, char **selection,
-                             File_Picker_Mode *mode, bool *graphical,
-                             bool *failed)
-{
-    if (atomic_load_explicit(&picker->state, memory_order_acquire) !=
-        FILE_PICKER_COMPLETE) {
-        return false;
-    }
-
-    worker_thread_join(&picker->thread);
-    *selection = picker->selection;
-    *mode = picker->mode;
-    *graphical = picker->graphical;
-    *failed = picker->failed;
-    picker->selection = NULL;
-    picker->mode = FILE_PICKER_NONE;
-    atomic_store_explicit(&picker->state, FILE_PICKER_IDLE,
-                          memory_order_release);
-    return true;
-}
-
-static void file_picker_uninit(File_Picker *picker)
-{
-    if (atomic_load_explicit(&picker->state, memory_order_acquire) !=
-        FILE_PICKER_IDLE) {
-        worker_thread_join(&picker->thread);
-    }
-
-    free(picker->selection);
-}
-
-typedef struct {
-    Texture2D back;
-    Texture2D forward;
-    Texture2D pause;
-    Texture2D play;
-    Texture2D repeat;
-    Texture2D repeat_one;
-    Texture2D shuffle;
-    Texture2D playlist;
-    Texture2D settings;
-    Texture2D playlist_back;
-    Texture2D playlist_forward;
-} Ui_Icons;
-
-typedef struct {
-    Ui_Icons current;
-    Ui_Icons next;
-    System_Theme current_theme;
-    System_Theme target_theme;
-    float progress;
-    bool active;
-} Ui_Icon_Transition;
-
-typedef struct {
-    Color background;
-    Color surface;
-    Color surface_border;
-    Color spectrum;
-    Color button;
-    Color button_disabled;
-    Color button_active;
-    Color button_hover;
-    Color text_primary;
-    Color text_secondary;
-    Color text_muted;
-    Color text_faint;
-    Color playlist_current;
-    Color playlist_item;
-    Color playlist_hover;
-    Color progress_background;
-    Color progress_foreground;
-    Color progress_hover;
-} Ui_Theme;
-
-static const Ui_Theme ui_themes[] = {
-    [SYSTEM_THEME_LIGHT] =
-        {
-            .background = {250, 250, 250, 255},
-            .surface = {240, 240, 240, 255},
-            .surface_border = {205, 205, 205, 255},
-            .spectrum = {50, 50, 50, 255},
-            .button = {232, 232, 232, 255},
-            .button_disabled = {245, 245, 245, 255},
-            .button_active = {210, 210, 210, 255},
-            .button_hover = {200, 200, 200, 255},
-            .text_primary = {24, 24, 24, 255},
-            .text_secondary = {65, 65, 65, 255},
-            .text_muted = {105, 105, 105, 255},
-            .text_faint = {155, 155, 155, 255},
-            .playlist_current = {218, 218, 218, 255},
-            .playlist_item = {244, 244, 244, 255},
-            .playlist_hover = {230, 230, 230, 255},
-            .progress_background = {205, 205, 205, 255},
-            .progress_foreground = {45, 45, 45, 255},
-            .progress_hover = {0, 0, 0, 255},
-        },
-    [SYSTEM_THEME_DARK] =
-        {
-            .background = {18, 18, 18, 255},
-            .surface = {24, 24, 24, 255},
-            .surface_border = {55, 55, 55, 255},
-            .spectrum = {210, 210, 210, 255},
-            .button = {36, 36, 36, 255},
-            .button_disabled = {24, 24, 24, 255},
-            .button_active = {52, 52, 52, 255},
-            .button_hover = {68, 68, 68, 255},
-            .text_primary = {245, 245, 245, 255},
-            .text_secondary = {200, 200, 200, 255},
-            .text_muted = {130, 130, 130, 255},
-            .text_faint = {80, 80, 80, 255},
-            .playlist_current = {58, 58, 58, 255},
-            .playlist_item = {31, 31, 31, 255},
-            .playlist_hover = {44, 44, 44, 255},
-            .progress_background = {55, 55, 55, 255},
-            .progress_foreground = {230, 230, 230, 255},
-            .progress_hover = {255, 255, 255, 255},
-        },
-};
-
-static const Ui_Theme *ui_theme_for(System_Theme theme)
-{
-    return &ui_themes[theme == SYSTEM_THEME_DARK ? SYSTEM_THEME_DARK
-                                                  : SYSTEM_THEME_LIGHT];
-}
-
-typedef struct {
-    Ui_Theme current;
-    Ui_Theme start;
-    Ui_Theme target;
-    float progress;
-    bool active;
-} Ui_Theme_Transition;
-
-static Color blend_color(Color start, Color target, float amount)
-{
-    return (Color){
-        (unsigned char)(start.r + (target.r - start.r) * amount + 0.5f),
-        (unsigned char)(start.g + (target.g - start.g) * amount + 0.5f),
-        (unsigned char)(start.b + (target.b - start.b) * amount + 0.5f),
-        (unsigned char)(start.a + (target.a - start.a) * amount + 0.5f),
-    };
-}
-
-static Ui_Theme blend_theme(const Ui_Theme *start, const Ui_Theme *target,
-                            float amount)
-{
-#define BLEND_THEME_COLOR(field)                                             \
-    .field = blend_color(start->field, target->field, amount)
-    return (Ui_Theme){
-        BLEND_THEME_COLOR(background),
-        BLEND_THEME_COLOR(surface),
-        BLEND_THEME_COLOR(surface_border),
-        BLEND_THEME_COLOR(spectrum),
-        BLEND_THEME_COLOR(button),
-        BLEND_THEME_COLOR(button_disabled),
-        BLEND_THEME_COLOR(button_active),
-        BLEND_THEME_COLOR(button_hover),
-        BLEND_THEME_COLOR(text_primary),
-        BLEND_THEME_COLOR(text_secondary),
-        BLEND_THEME_COLOR(text_muted),
-        BLEND_THEME_COLOR(text_faint),
-        BLEND_THEME_COLOR(playlist_current),
-        BLEND_THEME_COLOR(playlist_item),
-        BLEND_THEME_COLOR(playlist_hover),
-        BLEND_THEME_COLOR(progress_background),
-        BLEND_THEME_COLOR(progress_foreground),
-        BLEND_THEME_COLOR(progress_hover),
-    };
-#undef BLEND_THEME_COLOR
-}
-
-static void begin_theme_transition(Ui_Theme_Transition *transition,
-                                   System_Theme target)
-{
-    transition->start = transition->current;
-    transition->target = *ui_theme_for(target);
-    transition->progress = 0.0f;
-    transition->active = true;
-}
-
-static void update_theme_transition(Ui_Theme_Transition *transition,
-                                    float delta_time)
-{
-    if (!transition->active) return;
-
-    transition->progress += delta_time / THEME_TRANSITION_SECONDS;
-
-    if (transition->progress >= 1.0f) {
-        transition->current = transition->target;
-        transition->progress = 1.0f;
-        transition->active = false;
-        return;
-    }
-
-    float amount = transition->progress * transition->progress *
-                   (3.0f - 2.0f * transition->progress);
-    transition->current =
-        blend_theme(&transition->start, &transition->target, amount);
-}
-
-typedef struct {
-    Texture2D texture;
-    char *track_path;
-} Album_Art;
-
-typedef struct {
-    float scale;
-    int width;
-    int height;
-    int title_size;
-    int status_size;
-    int playlist_header_size;
-    int playlist_title_size;
-    int playlist_details_size;
-    int playlist_search_size;
-    float title_x;
-    float title_y;
-    float details_y;
-    float metadata_y;
-    float playlist_top;
-    float playlist_item_height;
-    float playlist_item_gap;
-    int visible_playlist_items;
-    Rectangle previous_button;
-    Rectangle play_button;
-    Rectangle next_button;
-    Rectangle repeat_button;
-    Rectangle shuffle_button;
-    Rectangle playlist_button;
-    Rectangle settings_button;
-    Rectangle progress_bar;
-    Rectangle progress_hitbox;
-    Rectangle album_art;
-    Rectangle spectrum;
-    Rectangle playlist_panel;
-    Rectangle playlist_viewport;
-    Rectangle playlist_search;
-    Rectangle playlist_open;
-    Rectangle settings_panel;
-    Rectangle settings_playlist_side;
-    Rectangle playlist_toggle;
-    Rectangle playlist_toggle_reveal;
-} Ui_Layout;
-
-typedef struct {
-    Rectangle panel;
-    Rectangle files;
-    Rectangle folder;
-} Open_Menu_Layout;
-
-static void unload_ui_icons(Ui_Icons *icons)
-{
-    Texture2D *textures[] = {
-        &icons->back,     &icons->forward,       &icons->pause,
-        &icons->play,     &icons->repeat,        &icons->repeat_one,
-        &icons->shuffle,  &icons->playlist,      &icons->settings,
-        &icons->playlist_back, &icons->playlist_forward,
-    };
-
-    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
-        if (IsTextureValid(*textures[i])) UnloadTexture(*textures[i]);
-    }
-
-    *icons = (Ui_Icons){0};
-}
-
-static bool load_application_icon(Texture2D *texture)
-{
-    Embedded_Asset asset = asset_get(ASSET_ICON_PNG);
-
-    if (asset.data == NULL || asset.size > INT_MAX) {
-        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
-        return false;
-    }
-
-    Image icon = LoadImageFromMemory(".png", asset.data, (int)asset.size);
-
-    if (!IsImageValid(icon)) {
-        mp_log(ERROR, "failed to load application icon: %s", asset.name);
-        return false;
-    }
-
-    ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-
-    if (!IsImageValid(icon) ||
-        icon.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
-        mp_log(ERROR, "failed to convert application icon: %s", asset.name);
-        UnloadImage(icon);
-        return false;
-    }
-
-    SetWindowIcon(icon);
-    *texture = LoadTextureFromImage(icon);
-    UnloadImage(icon);
-
-    if (!IsTextureValid(*texture)) {
-        mp_log(ERROR, "failed to create application icon texture");
-        return false;
-    }
-
-    GenTextureMipmaps(texture);
-    SetTextureFilter(*texture, TEXTURE_FILTER_TRILINEAR);
-    return true;
-}
-
-static int font_index_for_size(int font_size)
-{
-    int index = 0;
-    int distance = abs(font_sizes[0] - font_size);
-
-    for (int i = 1; i < FONT_COUNT; ++i) {
-        int candidate_distance = abs(font_sizes[i] - font_size);
-
-        if (candidate_distance < distance) {
-            index = i;
-            distance = candidate_distance;
-        }
-    }
-
-    return index;
-}
-
-static bool font_codepoints_add(Font_Codepoints *set, int codepoint)
-{
-    for (int i = 0; i < set->count; ++i) {
-        if (set->values[i] == codepoint) return true;
-    }
-
-    if (set->count == set->capacity) {
-        int capacity = set->capacity == 0 ? 64 : set->capacity * 2;
-
-        if (capacity < set->capacity ||
-            (size_t)capacity > SIZE_MAX / sizeof(*set->values)) {
-            return false;
-        }
-
-        int *values = realloc(set->values,
-                              (size_t)capacity * sizeof(*set->values));
-
-        if (values == NULL) return false;
-
-        set->values = values;
-        set->capacity = capacity;
-    }
-
-    set->values[set->count++] = codepoint;
-    return true;
-}
-
-static bool font_codepoints_contains(const Font_Codepoints *set,
-                                     int codepoint)
-{
-    for (int i = 0; i < set->count; ++i) {
-        if (set->values[i] == codepoint) return true;
-    }
-
-    return false;
-}
-
-static Embedded_Asset font_asset(Font_Face face)
-{
-    static const Asset_Id ids[FONT_FACE_COUNT] = {
-        [FONT_FACE_BASE] = ASSET_NOTO_SANS_TTF,
-        [FONT_FACE_JP] = ASSET_NOTO_SANS_JP_TTF,
-        [FONT_FACE_KR] = ASSET_NOTO_SANS_KR_TTF,
-        [FONT_FACE_TC] = ASSET_NOTO_SANS_TC_TTF,
-    };
-
-    return asset_get(ids[face]);
-}
-
-static void unload_fonts(void)
-{
-    for (int i = 0; i < FONT_COUNT; ++i) {
-        if (IsFontValid(fonts[i])) UnloadFont(fonts[i]);
-        fonts[i] = (Font){0};
-        font_dirty[i] = false;
-
-        for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-            free(font_codepoints[i][face].values);
-            font_codepoints[i][face] = (Font_Codepoints){0};
-        }
-
-        free(font_unsupported[i].values);
-        font_unsupported[i] = (Font_Codepoints){0};
-    }
-
-    font_renderer_uninit(&font_renderer);
-}
-
-static bool load_font_renderer(void)
-{
-    const unsigned char *data[FONT_FACE_COUNT] = {0};
-    size_t sizes[FONT_FACE_COUNT] = {0};
-
-    for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-        Embedded_Asset asset = font_asset((Font_Face)face);
-        data[face] = asset.data;
-        sizes[face] = asset.size;
-    }
-
-    return font_renderer_init(&font_renderer, data, sizes, FONT_FACE_COUNT);
-}
-
-static bool rebuild_font(int index)
-{
-    GlyphInfo *parts[FONT_FACE_COUNT] = {0};
-    int part_counts[FONT_FACE_COUNT] = {0};
-    int total = 0;
-    int font_size = font_sizes[index];
-
-    for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-        Font_Codepoints *codepoints = &font_codepoints[index][face];
-
-        if (codepoints->count == 0) continue;
-
-        Embedded_Asset asset = font_asset((Font_Face)face);
-
-        if (asset.data == NULL || asset.size > INT_MAX) goto failure;
-
-        parts[face] = font_renderer_load(
-            &font_renderer, face, font_size, codepoints->values,
-            codepoints->count);
-        part_counts[face] = parts[face] == NULL ? 0 : codepoints->count;
-
-        if (parts[face] == NULL ||
-            part_counts[face] != codepoints->count ||
-            part_counts[face] > INT_MAX - total) {
-            goto failure;
-        }
-
-        total += part_counts[face];
-    }
-
-    Font replacement = {
-        .baseSize = font_size,
-        .glyphCount = total,
-        .glyphPadding = 4,
-    };
-    replacement.glyphs =
-        MemAlloc((unsigned int)((size_t)total * sizeof(*replacement.glyphs)));
-
-    if (replacement.glyphs == NULL) goto failure;
-
-    int offset = 0;
-
-    for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-        if (part_counts[face] == 0) continue;
-
-        memcpy(replacement.glyphs + offset, parts[face],
-               (size_t)part_counts[face] * sizeof(*parts[face]));
-        offset += part_counts[face];
-        MemFree(parts[face]);
-        parts[face] = NULL;
-    }
-
-    Image atlas = GenImageFontAtlas(
-        replacement.glyphs, &replacement.recs, replacement.glyphCount,
-        replacement.baseSize, replacement.glyphPadding, 0);
-
-    if (!IsImageValid(atlas) || replacement.recs == NULL) {
-        if (IsImageValid(atlas)) UnloadImage(atlas);
-        UnloadFontData(replacement.glyphs, replacement.glyphCount);
-        if (replacement.recs != NULL) MemFree(replacement.recs);
-        return false;
-    }
-
-    replacement.texture = LoadTextureFromImage(atlas);
-    UnloadImage(atlas);
-
-    if (!IsTextureValid(replacement.texture)) {
-        UnloadFontData(replacement.glyphs, replacement.glyphCount);
-        MemFree(replacement.recs);
-        return false;
-    }
-
-    SetTextureFilter(replacement.texture, TEXTURE_FILTER_POINT);
-
-    if (IsFontValid(fonts[index])) UnloadFont(fonts[index]);
-    fonts[index] = replacement;
-    return true;
-
-failure:
-    for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-        if (parts[face] != NULL) {
-            UnloadFontData(parts[face], part_counts[face]);
-        }
-    }
-
-    return false;
-}
-
-static bool japanese_codepoint(int codepoint)
-{
-    return (codepoint >= 0x3040 && codepoint <= 0x30ff) ||
-           (codepoint >= 0x31f0 && codepoint <= 0x31ff);
-}
-
-static bool korean_codepoint(int codepoint)
-{
-    return (codepoint >= 0x1100 && codepoint <= 0x11ff) ||
-           (codepoint >= 0x3130 && codepoint <= 0x318f) ||
-           (codepoint >= 0xa960 && codepoint <= 0xa97f) ||
-           (codepoint >= 0xac00 && codepoint <= 0xd7ff);
-}
-
-static bool traditional_chinese_codepoint(int codepoint)
-{
-    return (codepoint >= 0x3100 && codepoint <= 0x312f) ||
-           (codepoint >= 0x31a0 && codepoint <= 0x31bf);
-}
-
-static bool shared_cjk_codepoint(int codepoint)
-{
-    return (codepoint >= 0x3000 && codepoint <= 0x303f) ||
-           (codepoint >= 0x3400 && codepoint <= 0x4dbf) ||
-           (codepoint >= 0x4e00 && codepoint <= 0x9fff) ||
-           (codepoint >= 0xf900 && codepoint <= 0xfaff) ||
-           (codepoint >= 0xff00 && codepoint <= 0xffef) ||
-           (codepoint >= 0x20000 && codepoint <= 0x2fa1f);
-}
-
-static Font_Face text_cjk_face(const char *text)
-{
-    bool has_korean = false;
-    bool has_traditional_chinese = false;
-
-    for (const char *cursor = text; *cursor != '\0';) {
-        int bytes = 0;
-        int codepoint = GetCodepointNext(cursor, &bytes);
-
-        if (bytes <= 0) bytes = 1;
-        cursor += bytes;
-
-        if (japanese_codepoint(codepoint)) return FONT_FACE_JP;
-        if (korean_codepoint(codepoint)) has_korean = true;
-        if (traditional_chinese_codepoint(codepoint)) {
-            has_traditional_chinese = true;
-        }
-    }
-
-    if (has_korean) return FONT_FACE_KR;
-    if (has_traditional_chinese) return FONT_FACE_TC;
-    return FONT_FACE_TC;
-}
-
-static Font_Face codepoint_face(int codepoint, Font_Face cjk_face)
-{
-    if (japanese_codepoint(codepoint)) return FONT_FACE_JP;
-    if (korean_codepoint(codepoint)) return FONT_FACE_KR;
-    if (traditional_chinese_codepoint(codepoint)) return FONT_FACE_TC;
-    if (shared_cjk_codepoint(codepoint)) return cjk_face;
-    return FONT_FACE_BASE;
-}
-
-static bool available_codepoint_face(int codepoint, Font_Face cjk_face,
-                                     Font_Face *available)
-{
-    Font_Face preferred = codepoint_face(codepoint, cjk_face);
-    Font_Face order[] = {
-        preferred,
-        FONT_FACE_BASE,
-        FONT_FACE_JP,
-        FONT_FACE_KR,
-        FONT_FACE_TC,
-    };
-
-    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); ++i) {
-        bool duplicate = false;
-
-        for (size_t previous = 0; previous < i; ++previous) {
-            if (order[previous] == order[i]) {
-                duplicate = true;
-                break;
-            }
-        }
-
-        if (!duplicate &&
-            font_renderer_has(&font_renderer, order[i], codepoint)) {
-            *available = order[i];
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool collect_font_text(const char *text, int font_size)
-{
-    if (text == NULL || text[0] == '\0') return true;
-
-    int index = font_index_for_size(font_size);
-    Font_Face cjk_face = text_cjk_face(text);
-
-    for (const char *cursor = text; *cursor != '\0';) {
-        int bytes = 0;
-        int codepoint = GetCodepointNext(cursor, &bytes);
-
-        if (bytes <= 0) bytes = 1;
-        cursor += bytes;
-
-        bool known = false;
-
-        for (int face = 0; face < FONT_FACE_COUNT; ++face) {
-            if (font_codepoints_contains(&font_codepoints[index][face],
-                                         codepoint)) {
-                known = true;
-                break;
-            }
-        }
-
-        if (known) continue;
-
-        if (font_codepoints_contains(&font_unsupported[index], codepoint)) {
-            continue;
-        }
-
-        Font_Face face;
-
-        if (!available_codepoint_face(codepoint, cjk_face, &face)) {
-            if (!font_codepoints_add(&font_unsupported[index], codepoint)) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (!font_codepoints_add(&font_codepoints[index][face], codepoint)) {
-            return false;
-        }
-
-        font_dirty[index] = true;
-    }
-
-    return true;
-}
-
-static bool rebuild_dirty_fonts(void)
-{
-    bool success = true;
-
-    for (int i = 0; i < FONT_COUNT; ++i) {
-        if (!font_dirty[i]) continue;
-
-        if (!rebuild_font(i)) success = false;
-        font_dirty[i] = false;
-    }
-
-    return success;
-}
-
-static bool load_fonts(void)
-{
-    const int ranges[][2] = {
-        {0x0020, 0x007e},
-        {0x00a0, 0x017f},
-        {0x0400, 0x0486},
-        {0x0488, 0x0513},
-        {0x2000, 0x200b},
-        {0x2013, 0x2015},
-        {0x2017, 0x201e},
-        {0x2020, 0x2022},
-        {0x2026, 0x2026},
-        {0x2030, 0x2030},
-        {0x2032, 0x2033},
-        {0x2039, 0x203a},
-        {0x203c, 0x203c},
-        {0x2044, 0x2044},
-    };
-
-    if (!load_font_renderer()) {
-        unload_fonts();
-        return false;
-    }
-
-    for (int i = 0; i < FONT_COUNT; ++i) {
-        Font_Codepoints *base = &font_codepoints[i][FONT_FACE_BASE];
-
-        for (size_t range = 0; range < sizeof(ranges) / sizeof(ranges[0]);
-             ++range) {
-            for (int codepoint = ranges[range][0];
-                 codepoint <= ranges[range][1]; ++codepoint) {
-                if (!font_renderer_has(&font_renderer, FONT_FACE_BASE,
-                                       codepoint)) {
-                    continue;
-                }
-
-                if (!font_codepoints_add(base, codepoint)) {
-                    unload_fonts();
-                    return false;
-                }
-            }
-        }
-
-        if (!rebuild_font(i)) {
-            mp_log(ERROR, "failed to load Noto Sans at %d px",
-                   font_sizes[i]);
-            unload_fonts();
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static Font font_for_size(int font_size)
-{
-    return fonts[font_index_for_size(font_size)];
-}
-
-static int measure_text(const char *text, int font_size)
-{
-    Font font = font_for_size(font_size);
-    return (int)roundf(MeasureTextEx(font, text, (float)font_size, 0.0f).x);
-}
-
-static void draw_text(const char *text, int x, int y, int font_size,
-                      Color color)
-{
-    DrawTextEx(font_for_size(font_size), text, (Vector2){(float)x, (float)y},
-               (float)font_size, 0.0f, color);
-}
-
-static Texture2D load_asset_texture(Asset_Id id, int size, float content_scale)
-{
-    Embedded_Asset asset = asset_get(id);
-
-    if (asset.data == NULL) {
-        mp_log(ERROR, "invalid embedded asset: %s", asset.name);
-        return (Texture2D){0};
-    }
-
-    return svg_load_texture(asset.name, asset.data, asset.size, size,
-                            content_scale);
-}
-
-static bool create_ui_icons(Ui_Icons *icons, System_Theme theme)
-{
-    bool dark = theme == SYSTEM_THEME_DARK;
-    Asset_Id back = dark ? ASSET_BACK_WHITE_SVG : ASSET_BACK_BLACK_SVG;
-    Asset_Id forward =
-        dark ? ASSET_FORWARD_WHITE_SVG : ASSET_FORWARD_BLACK_SVG;
-    Asset_Id pause = dark ? ASSET_PAUSE_WHITE_SVG : ASSET_PAUSE_BLACK_SVG;
-    Asset_Id play = dark ? ASSET_PLAY_WHITE_SVG : ASSET_PLAY_BLACK_SVG;
-    Asset_Id repeat = dark ? ASSET_REPEAT_WHITE_SVG : ASSET_REPEAT_BLACK_SVG;
-    Asset_Id repeat_one =
-        dark ? ASSET_REPEAT_ONE_WHITE_SVG : ASSET_REPEAT_ONE_BLACK_SVG;
-    Asset_Id shuffle =
-        dark ? ASSET_SHUFFLE_WHITE_SVG : ASSET_SHUFFLE_BLACK_SVG;
-    Asset_Id playlist =
-        dark ? ASSET_PLAYLIST_WHITE_SVG : ASSET_PLAYLIST_BLACK_SVG;
-    Asset_Id settings =
-        dark ? ASSET_SETTINGS_WHITE_SVG : ASSET_SETTINGS_BLACK_SVG;
-
-    *icons = (Ui_Icons){
-        .back = load_asset_texture(back, UI_BUTTON_ICON_SIZE, 0.74f),
-        .forward = load_asset_texture(forward, UI_BUTTON_ICON_SIZE, 0.74f),
-        .pause = load_asset_texture(pause, UI_BUTTON_ICON_SIZE, 0.72f),
-        .play = load_asset_texture(play, UI_BUTTON_ICON_SIZE, 0.72f),
-        .repeat = load_asset_texture(repeat, UI_BUTTON_ICON_SIZE, 0.68f),
-        .repeat_one =
-            load_asset_texture(repeat_one, UI_BUTTON_ICON_SIZE, 0.68f),
-        .shuffle = load_asset_texture(shuffle, UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist = load_asset_texture(playlist, UI_BUTTON_ICON_SIZE, 0.72f),
-        .settings = load_asset_texture(settings, UI_BUTTON_ICON_SIZE, 0.68f),
-        .playlist_back = load_asset_texture(back, UI_TOGGLE_ICON_SIZE, 0.88f),
-        .playlist_forward =
-            load_asset_texture(forward, UI_TOGGLE_ICON_SIZE, 0.88f),
-    };
-
-    Texture2D textures[] = {
-        icons->back,     icons->forward,       icons->pause,
-        icons->play,     icons->repeat,        icons->repeat_one,
-        icons->shuffle,  icons->playlist,      icons->settings,
-        icons->playlist_back, icons->playlist_forward,
-    };
-
-    for (size_t i = 0; i < sizeof(textures) / sizeof(textures[0]); ++i) {
-        if (!IsTextureValid(textures[i])) {
-            unload_ui_icons(icons);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool init_ui_icon_transition(Ui_Icon_Transition *transition,
-                                    System_Theme theme)
-{
-    *transition = (Ui_Icon_Transition){
-        .current_theme = theme,
-        .target_theme = theme,
-    };
-    return create_ui_icons(&transition->current, theme);
-}
-
-static bool begin_ui_icon_transition(Ui_Icon_Transition *transition,
-                                     System_Theme target)
-{
-    if (transition->active) {
-        if (target == transition->target_theme) return true;
-
-        if (target == transition->current_theme) {
-            Ui_Icons icons = transition->current;
-            transition->current = transition->next;
-            transition->next = icons;
-
-            System_Theme theme = transition->current_theme;
-            transition->current_theme = transition->target_theme;
-            transition->target_theme = theme;
-            transition->progress = 1.0f - transition->progress;
-            return true;
-        }
-    }
-
-    if (target == transition->current_theme) return true;
-
-    Ui_Icons next = {0};
-
-    if (!create_ui_icons(&next, target)) return false;
-
-    transition->next = next;
-    transition->target_theme = target;
-    transition->progress = 0.0f;
-    transition->active = true;
-    return true;
-}
-
-static void update_ui_icon_transition(Ui_Icon_Transition *transition,
-                                      float delta_time)
-{
-    if (!transition->active) return;
-
-    transition->progress += delta_time / THEME_TRANSITION_SECONDS;
-
-    if (transition->progress < 1.0f) return;
-
-    unload_ui_icons(&transition->current);
-    transition->current = transition->next;
-    transition->next = (Ui_Icons){0};
-    transition->current_theme = transition->target_theme;
-    transition->progress = 0.0f;
-    transition->active = false;
-}
-
-static float ui_icon_transition_amount(const Ui_Icon_Transition *transition)
-{
-    if (!transition->active) return 0.0f;
-
-    float progress = transition->progress;
-    return progress * progress * (3.0f - 2.0f * progress);
-}
-
-static void unload_ui_icon_transition(Ui_Icon_Transition *transition)
-{
-    unload_ui_icons(&transition->current);
-    unload_ui_icons(&transition->next);
-    *transition = (Ui_Icon_Transition){0};
 }
 
 static float clamp_float(float value, float minimum, float maximum)
@@ -1383,39 +358,6 @@ static Rectangle snap_rectangle(Rectangle rectangle)
     return rectangle;
 }
 
-static Open_Menu_Layout make_open_menu_layout(Vector2 center, float scale,
-                                               int screen_width,
-                                               int screen_height)
-{
-    float width = snap_pixel(clamp_float(164.0f * scale, 144.0f, 210.0f));
-    float row_height =
-        snap_pixel(clamp_float(40.0f * scale, 36.0f, 52.0f));
-    float border = 1.0f;
-    Rectangle panel = snap_rectangle((Rectangle){
-        center.x - width / 2.0f,
-        center.y - row_height,
-        width,
-        row_height * 2.0f + border * 2.0f,
-    });
-
-    if (panel.x < 4.0f) panel.x = 4.0f;
-    if (panel.y < 4.0f) panel.y = 4.0f;
-    if (panel.x + panel.width > (float)screen_width - 4.0f) {
-        panel.x = (float)screen_width - panel.width - 4.0f;
-    }
-    if (panel.y + panel.height > (float)screen_height - 4.0f) {
-        panel.y = (float)screen_height - panel.height - 4.0f;
-    }
-
-    return (Open_Menu_Layout){
-        .panel = panel,
-        .files = {panel.x + border, panel.y + border,
-                  panel.width - border * 2.0f, row_height},
-        .folder = {panel.x + border, panel.y + border + row_height,
-                   panel.width - border * 2.0f, row_height},
-    };
-}
-
 static void draw_panel_frame(Rectangle panel, Color color)
 {
     panel.width -= 1.0f;
@@ -1426,125 +368,40 @@ static void draw_panel_frame(Rectangle panel, Color color)
     }
 }
 
-static int crisp_font_size(float desired, int minimum, int maximum);
+static void draw_panel_surface(Rectangle panel, bool translucent,
+                               const Ui_Theme *theme)
+{
+    Rectangle shadow = panel;
+    shadow.x += 5.0f;
+    shadow.y += 6.0f;
+    DrawRectangleRec(shadow, (Color){0, 0, 0, 28});
+    Color surface = translucent ? theme->surface : theme->solid_surface;
+
+    DrawRectangleRec(panel, surface);
+    draw_panel_frame(panel, theme->surface_border);
+}
 
 static void draw_open_menu(const Open_Menu_Layout *menu, Vector2 mouse,
                            float scale, const Ui_Theme *theme)
 {
-    int font_size = crisp_font_size(17.0f * scale, 14, 20);
+    int font_size = ui_font_crisp_size(17.0f * scale, 14, 20);
     const Rectangle rows[] = {menu->files, menu->folder};
     const char *labels[] = {"Files", "Folder"};
 
-    DrawRectangleRec(menu->panel, theme->surface);
+    draw_panel_surface(menu->panel, true, theme);
 
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         bool hovered = CheckCollisionPointRec(mouse, rows[i]);
         DrawRectangleRec(rows[i], hovered ? theme->playlist_hover
                                           : theme->playlist_item);
-        int width = measure_text(labels[i], font_size);
-        draw_text(labels[i],
-                  (int)snap_pixel(rows[i].x +
-                                  (rows[i].width - (float)width) / 2.0f),
-                  (int)snap_pixel(rows[i].y +
-                                  (rows[i].height - font_size) / 2.0f - 1.0f),
-                  font_size, theme->text_primary);
+        int width = ui_font_measure(labels[i], font_size);
+        ui_font_draw(
+            labels[i],
+            (int)snap_pixel(rows[i].x + (rows[i].width - (float)width) / 2.0f),
+            (int)snap_pixel(rows[i].y + (rows[i].height - font_size) / 2.0f -
+                            1.0f),
+            font_size, theme->text_primary);
     }
-
-    draw_panel_frame(menu->panel, theme->surface_border);
-}
-
-static void album_art_clear(Album_Art *album_art)
-{
-    if (IsTextureValid(album_art->texture)) {
-        UnloadTexture(album_art->texture);
-    }
-
-    free(album_art->track_path);
-    *album_art = (Album_Art){0};
-}
-
-static void album_art_update(Album_Art *album_art, const char *track_path)
-{
-    if ((track_path == NULL && album_art->track_path == NULL) ||
-        (track_path != NULL && album_art->track_path != NULL &&
-         strcmp(track_path, album_art->track_path) == 0)) {
-        return;
-    }
-
-    album_art_clear(album_art);
-
-    if (track_path == NULL) return;
-
-    size_t path_size = strlen(track_path) + 1;
-    album_art->track_path = malloc(path_size);
-
-    if (album_art->track_path == NULL) {
-        mp_log(WARNING, "failed to remember album art path");
-        return;
-    }
-
-    memcpy(album_art->track_path, track_path, path_size);
-
-    Track_Cover cover;
-
-    if (!metadata_cover_load(track_path, &cover)) return;
-
-    const char *file_type = cover.format == TRACK_COVER_JPEG ? ".jpg" : ".png";
-    Image image = {0};
-
-    if (cover.size <= INT_MAX) {
-        image = LoadImageFromMemory(file_type, cover.data, (int)cover.size);
-    }
-
-    metadata_cover_unload(&cover);
-
-    if (!IsImageValid(image)) {
-        mp_log(WARNING, "failed to decode album art for \"%s\"", track_path);
-        return;
-    }
-
-    Texture2D texture = LoadTextureFromImage(image);
-    UnloadImage(image);
-
-    if (!IsTextureValid(texture)) {
-        mp_log(WARNING, "failed to upload album art for \"%s\"", track_path);
-        return;
-    }
-
-    SetTextureFilter(texture, TEXTURE_FILTER_BILINEAR);
-    album_art->texture = texture;
-}
-
-static void draw_album_art(const Album_Art *album_art, Rectangle bounds,
-                           const Ui_Theme *theme)
-{
-    if (!IsTextureValid(album_art->texture) || bounds.width <= 0.0f ||
-        bounds.height <= 0.0f) {
-        return;
-    }
-
-    float horizontal_scale = bounds.width / album_art->texture.width;
-    float vertical_scale = bounds.height / album_art->texture.height;
-    float scale =
-        horizontal_scale < vertical_scale ? horizontal_scale : vertical_scale;
-    Rectangle destination = snap_rectangle((Rectangle){
-        bounds.x +
-            (bounds.width - (float)album_art->texture.width * scale) / 2.0f,
-        bounds.y +
-            (bounds.height - (float)album_art->texture.height * scale) / 2.0f,
-        (float)album_art->texture.width * scale,
-        (float)album_art->texture.height * scale,
-    });
-    Rectangle source = {
-        0.0f,
-        0.0f,
-        (float)album_art->texture.width,
-        (float)album_art->texture.height,
-    };
-
-    DrawRectangleRec(bounds, theme->surface);
-    DrawTexturePro(album_art->texture, source, destination, (Vector2){0}, 0.0f,
-                   WHITE);
 }
 
 static size_t spectrum_bar_count(Rectangle bounds, float scale)
@@ -1563,8 +420,7 @@ static size_t spectrum_bar_count(Rectangle bounds, float scale)
 }
 
 static void draw_spectrum(const Spectrum *spectrum, Rectangle bounds,
-                          size_t bar_count, float scale,
-                          const Ui_Theme *theme)
+                          size_t bar_count, float scale, const Ui_Theme *theme)
 {
     if (bar_count == 0 || bounds.width <= 0.0f || bounds.height <= 0.0f) {
         return;
@@ -1607,7 +463,7 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
                                 bool scrolling, double started_at,
                                 const Rectangle *clip)
 {
-    int text_width = measure_text(text, font_size);
+    int text_width = ui_font_measure(text, font_size);
     float offset = 0.0f;
 
     if ((float)text_width > bounds.width && scrolling) {
@@ -1638,328 +494,12 @@ static void draw_scrolling_text(const char *text, Rectangle bounds,
 
     BeginScissorMode((int)scissor.x, (int)scissor.y, (int)scissor.width,
                      (int)scissor.height);
-    draw_text(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
-              font_size, color);
+    ui_font_draw(text, (int)(bounds.x - snap_pixel(offset)), (int)bounds.y,
+                 font_size, color);
     EndScissorMode();
 }
 
-static int crisp_font_size(float desired, int minimum, int maximum)
-{
-    int requested = (int)roundf(desired);
-
-    if (requested < minimum) requested = minimum;
-    if (requested > maximum) requested = maximum;
-
-    int index = font_index_for_size(requested);
-
-    while (index > 0 && font_sizes[index] > maximum) --index;
-    while (index + 1 < FONT_COUNT && font_sizes[index] < minimum) ++index;
-
-    return font_sizes[index];
-}
-
-static Ui_Layout make_ui_layout(int width, int height,
-                                float side_panel_open_amount,
-                                bool playlist_button_on_side)
-{
-    side_panel_open_amount =
-        clamp_float(side_panel_open_amount, 0.0f, 1.0f);
-
-    float horizontal_scale = (float)width / 1000.0f;
-    float vertical_scale = (float)height / 700.0f;
-    float scale =
-        horizontal_scale < vertical_scale ? horizontal_scale : vertical_scale;
-
-    scale = clamp_float(scale, 0.65f, 2.0f);
-
-    float button_size = snap_pixel(clamp_float(48.0f * scale, 32.0f, 72.0f));
-    float progress_height = snap_pixel(clamp_float(6.0f * scale, 4.0f, 10.0f));
-    float padding = snap_pixel(clamp_float(12.0f * scale, 8.0f, 24.0f));
-    float gap = snap_pixel(clamp_float(8.0f * scale, 6.0f, 16.0f));
-    float controls_y = (float)height - padding - button_size;
-    float panel_width =
-        snap_pixel(clamp_float((float)width * 0.36f, 280.0f, 520.0f));
-    float panel_max_height = (float)height - padding * 2.0f;
-    float panel_height = snap_pixel(panel_max_height);
-    float toggle_width = snap_pixel(clamp_float(32.0f * scale, 24.0f, 48.0f));
-    float toggle_height = snap_pixel(clamp_float(72.0f * scale, 52.0f, 108.0f));
-    float settings_x = (float)width - padding - button_size;
-    float playlist_x = settings_x - gap - button_size;
-    float repeat_right = playlist_button_on_side ? settings_x : playlist_x;
-    float repeat_x = repeat_right - gap - button_size;
-    float next_x = repeat_x - gap - button_size;
-    float play_x = next_x - gap - button_size;
-    float previous_x = play_x - gap - button_size;
-    float shuffle_x = previous_x - gap - button_size;
-    float panel_x = (float)width - panel_width;
-    float panel_y = padding;
-    float title_y = snap_pixel(controls_y - 128.0f * scale);
-    float album_art_gap = snap_pixel(20.0f * scale);
-    float max_album_art_width = (float)width - padding * 2.0f;
-    float max_album_art_height = title_y - album_art_gap - padding;
-    float album_art_size = snap_pixel(max_album_art_width < max_album_art_height
-                                          ? max_album_art_width
-                                          : max_album_art_height);
-
-    if (album_art_size < 0.0f) album_art_size = 0.0f;
-
-    Rectangle album_art = {
-        padding,
-        title_y - album_art_gap - album_art_size,
-        album_art_size,
-        album_art_size,
-    };
-    float spectrum_x = album_art.x + album_art.width + padding;
-    Rectangle spectrum = {
-        spectrum_x,
-        album_art.y,
-        (float)width - padding - spectrum_x,
-        album_art.height,
-    };
-
-    if (spectrum.width < 0.0f) spectrum.width = 0.0f;
-
-    if (panel_width + toggle_width + gap + padding > (float)width) {
-        panel_width = (float)width - toggle_width - gap - padding;
-        panel_x = (float)width - panel_width;
-    }
-
-    float open_panel_x = panel_x;
-    float open_toggle_x = open_panel_x - gap - toggle_width;
-    float closed_toggle_x = (float)width - toggle_width;
-    panel_x = (float)width +
-              (open_panel_x - (float)width) * side_panel_open_amount;
-    float toggle_x = closed_toggle_x +
-                     (open_toggle_x - closed_toggle_x) *
-                         side_panel_open_amount;
-    float panel_scale = panel_width / 380.0f;
-    float panel_height_scale = panel_height / 640.0f;
-
-    if (panel_height_scale < panel_scale) panel_scale = panel_height_scale;
-    panel_scale = clamp_float(panel_scale, 0.72f, 1.3f);
-
-    int playlist_header_size =
-        crisp_font_size(24.0f * panel_scale, 20, 30);
-    int playlist_title_size =
-        crisp_font_size(20.0f * panel_scale, 16, 24);
-    int playlist_details_size =
-        crisp_font_size(16.0f * panel_scale, 14, 20);
-    int playlist_search_size =
-        crisp_font_size(17.0f * panel_scale, 14, 20);
-    float panel_inner = snap_pixel(clamp_float(12.0f * panel_scale, 10.0f,
-                                               18.0f));
-    float header_height = snap_pixel(clamp_float(
-        54.0f * panel_scale, playlist_header_size + 20.0f, 70.0f));
-    float search_height = snap_pixel(clamp_float(
-        36.0f * panel_scale, playlist_search_size + 12.0f, 44.0f));
-    float search_gap = snap_pixel(clamp_float(8.0f * panel_scale, 6.0f, 12.0f));
-    float open_width = snap_pixel(clamp_float(68.0f * panel_scale, 60.0f,
-                                              84.0f));
-    float search_y = panel_y + panel_height - panel_inner - search_height;
-    float playlist_top = panel_y + header_height;
-    float playlist_bottom = search_y - panel_inner;
-    float playlist_item_height = snap_pixel(clamp_float(
-        (float)(playlist_title_size + playlist_details_size) +
-            12.0f * panel_scale,
-        44.0f, 68.0f));
-    float playlist_item_gap =
-        snap_pixel(clamp_float(4.0f * panel_scale, 3.0f, 7.0f));
-
-    Ui_Layout layout = {
-        .scale = scale,
-        .width = width,
-        .height = height,
-        .title_size = crisp_font_size(38.0f * scale, 30, 60),
-        .status_size = crisp_font_size(25.0f * scale, 20, 40),
-        .playlist_header_size = playlist_header_size,
-        .playlist_title_size = playlist_title_size,
-        .playlist_details_size = playlist_details_size,
-        .playlist_search_size = playlist_search_size,
-        .title_x = padding,
-        .title_y = title_y,
-        .details_y = snap_pixel(controls_y - 82.0f * scale),
-        .metadata_y = snap_pixel(controls_y - 37.0f * scale),
-        .playlist_top = playlist_top,
-        .playlist_item_height = playlist_item_height,
-        .playlist_item_gap = playlist_item_gap,
-        .previous_button = {previous_x, controls_y, button_size, button_size},
-        .play_button = {play_x, controls_y, button_size, button_size},
-        .next_button = {next_x, controls_y, button_size, button_size},
-        .repeat_button = {repeat_x, controls_y, button_size, button_size},
-        .shuffle_button = {shuffle_x, controls_y, button_size, button_size},
-        .playlist_button = {playlist_x, controls_y, button_size, button_size},
-        .settings_button = {settings_x, controls_y, button_size, button_size},
-        .progress_bar =
-            {
-                padding,
-                controls_y + (button_size - progress_height) / 2.0f,
-                shuffle_x - gap - padding,
-                progress_height,
-            },
-        .album_art = album_art,
-        .spectrum = spectrum,
-        .playlist_panel = {panel_x, panel_y, panel_width, panel_height},
-        .playlist_viewport =
-            {
-                panel_x + panel_inner,
-                playlist_top,
-                panel_width - panel_inner * 2.0f,
-                playlist_bottom - playlist_top,
-            },
-        .playlist_search =
-            {
-                panel_x + panel_inner,
-                search_y,
-                panel_width - panel_inner * 2.0f - search_gap - open_width,
-                search_height,
-            },
-        .playlist_open =
-            {
-                panel_x + panel_width - panel_inner - open_width,
-                search_y,
-                open_width,
-                search_height,
-            },
-        .settings_panel = {panel_x, panel_y, panel_width, panel_height},
-        .settings_playlist_side =
-            {
-                panel_x + 16.0f * scale,
-                panel_y + 72.0f * scale,
-                panel_width - 32.0f * scale,
-                snap_pixel(clamp_float(64.0f * scale, 52.0f, 88.0f)),
-            },
-        .playlist_toggle =
-            {
-                toggle_x,
-                ((float)height - toggle_height) / 2.0f,
-                toggle_width,
-                toggle_height,
-            },
-    };
-
-    float toggle_reveal_padding = snap_pixel(24.0f * scale);
-    layout.playlist_toggle_reveal = (Rectangle){
-        layout.playlist_toggle.x - toggle_reveal_padding,
-        layout.playlist_toggle.y - toggle_reveal_padding,
-        layout.playlist_toggle.width + toggle_reveal_padding * 2.0f,
-        layout.playlist_toggle.height + toggle_reveal_padding * 2.0f,
-    };
-
-    if (layout.playlist_toggle_reveal.x < 0.0f) {
-        layout.playlist_toggle_reveal.width += layout.playlist_toggle_reveal.x;
-        layout.playlist_toggle_reveal.x = 0.0f;
-    }
-
-    if (layout.playlist_toggle_reveal.y < 0.0f) {
-        layout.playlist_toggle_reveal.height += layout.playlist_toggle_reveal.y;
-        layout.playlist_toggle_reveal.y = 0.0f;
-    }
-
-    float reveal_right =
-        layout.playlist_toggle_reveal.x + layout.playlist_toggle_reveal.width;
-    float reveal_bottom =
-        layout.playlist_toggle_reveal.y + layout.playlist_toggle_reveal.height;
-
-    if (reveal_right > (float)width) {
-        layout.playlist_toggle_reveal.width -= reveal_right - (float)width;
-    }
-
-    if (reveal_bottom > (float)height) {
-        layout.playlist_toggle_reveal.height -= reveal_bottom - (float)height;
-    }
-
-    layout.previous_button = snap_rectangle(layout.previous_button);
-    layout.play_button = snap_rectangle(layout.play_button);
-    layout.next_button = snap_rectangle(layout.next_button);
-    layout.repeat_button = snap_rectangle(layout.repeat_button);
-    layout.shuffle_button = snap_rectangle(layout.shuffle_button);
-    layout.playlist_button = snap_rectangle(layout.playlist_button);
-    layout.settings_button = snap_rectangle(layout.settings_button);
-    layout.progress_bar = snap_rectangle(layout.progress_bar);
-    layout.album_art = snap_rectangle(layout.album_art);
-    layout.spectrum = snap_rectangle(layout.spectrum);
-    layout.playlist_panel = snap_rectangle(layout.playlist_panel);
-    layout.playlist_viewport = snap_rectangle(layout.playlist_viewport);
-    layout.playlist_search = snap_rectangle(layout.playlist_search);
-    layout.playlist_open = snap_rectangle(layout.playlist_open);
-    layout.settings_panel = snap_rectangle(layout.settings_panel);
-    layout.settings_playlist_side =
-        snap_rectangle(layout.settings_playlist_side);
-    layout.playlist_toggle = snap_rectangle(layout.playlist_toggle);
-    layout.playlist_toggle_reveal =
-        snap_rectangle(layout.playlist_toggle_reveal);
-
-    layout.progress_hitbox = snap_rectangle((Rectangle){
-        layout.progress_bar.x,
-        layout.progress_bar.y - 9.0f * scale,
-        layout.progress_bar.width,
-        24.0f * scale,
-    });
-
-    float playlist_step =
-        layout.playlist_item_height + layout.playlist_item_gap;
-    layout.visible_playlist_items =
-        (int)(layout.playlist_viewport.height / playlist_step);
-
-    if (layout.visible_playlist_items < 1) {
-        layout.visible_playlist_items = 1;
-    }
-
-    return layout;
-}
-
-static Rectangle playlist_item_bounds(const Ui_Layout *layout,
-                                      int visible_index, float scroll_offset)
-{
-    return snap_rectangle((Rectangle){
-        layout->playlist_viewport.x,
-        layout->playlist_viewport.y - scroll_offset +
-            (float)visible_index *
-                (layout->playlist_item_height + layout->playlist_item_gap),
-        layout->playlist_viewport.width,
-        layout->playlist_item_height,
-    });
-}
-
-static void draw_texture_icon(Texture2D texture, Rectangle bounds, Color tint)
-{
-    float size = bounds.width;
-    Rectangle source = {0.0f, 0.0f, (float)texture.width,
-                        (float)texture.height};
-    Rectangle destination = {bounds.x + bounds.width / 2.0f,
-                             bounds.y + bounds.height / 2.0f, size, size};
-    Vector2 origin = {size / 2.0f, size / 2.0f};
-
-    DrawTexturePro(texture, source, destination, origin, 0.0f, tint);
-}
-
-static Texture2D button_icon_texture(const Ui_Icons *icons, Button_Icon icon)
-{
-    switch (icon) {
-    case BUTTON_PREVIOUS:
-        return icons->back;
-    case BUTTON_PLAY:
-        return icons->play;
-    case BUTTON_PAUSE:
-        return icons->pause;
-    case BUTTON_NEXT:
-        return icons->forward;
-    case BUTTON_REPEAT:
-        return icons->repeat;
-    case BUTTON_REPEAT_ONE:
-        return icons->repeat_one;
-    case BUTTON_SHUFFLE:
-        return icons->shuffle;
-    case BUTTON_PLAYLIST:
-        return icons->playlist;
-    case BUTTON_SETTINGS:
-        return icons->settings;
-    }
-
-    return (Texture2D){0};
-}
-
-static void draw_button(Rectangle bounds, Button_Icon icon,
+static void draw_button(Rectangle bounds, Ui_Icon icon,
                         const Ui_Icon_Transition *icon_transition,
                         Vector2 mouse, bool enabled, bool active,
                         const Ui_Theme *theme)
@@ -1973,18 +513,31 @@ static void draw_button(Rectangle bounds, Button_Icon icon,
 
     DrawRectangleRec(bounds, fill);
 
-    Texture2D current =
-        button_icon_texture(&icon_transition->current, icon);
-
-    if (!icon_transition->active) {
-        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
-        return;
+    if (enabled && (hovered || active)) {
+        draw_panel_frame(bounds, theme->surface_border);
     }
 
-    float amount = ui_icon_transition_amount(icon_transition);
-    Texture2D next = button_icon_texture(&icon_transition->next, icon);
-    draw_texture_icon(current, bounds, Fade(WHITE, opacity * (1.0f - amount)));
-    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
+    ui_icon_transition_draw(icon_transition, icon, bounds, opacity);
+}
+
+static bool format_track_details(const Track_Metadata *metadata, char *text,
+                                 size_t capacity)
+{
+    bool has_artist = metadata->artist[0] != '\0';
+    bool has_album = metadata->album[0] != '\0';
+
+    if (has_artist && has_album) {
+        snprintf(text, capacity, "%s | %s", metadata->artist, metadata->album);
+    } else if (has_artist) {
+        snprintf(text, capacity, "%s", metadata->artist);
+    } else if (has_album) {
+        snprintf(text, capacity, "%s", metadata->album);
+    } else {
+        if (capacity > 0) text[0] = '\0';
+        return false;
+    }
+
+    return true;
 }
 
 static bool collect_playlist_font_text(const Playlist *playlist,
@@ -1994,12 +547,12 @@ static bool collect_playlist_font_text(const Playlist *playlist,
     size_t count = playlist_search_count(search, playlist);
     size_t first = scroll > 0.0f ? (size_t)floorf(scroll) : 0;
 
-    if (!collect_font_text(search->query, layout->playlist_search_size)) {
+    if (!ui_font_collect(search->query, layout->playlist_search_size)) {
         return false;
     }
 
     for (int visible_index = 0;
-         visible_index <= layout->visible_playlist_items; ++visible_index) {
+         visible_index <= layout->visible_playlist_items + 1; ++visible_index) {
         size_t result_index = first + (size_t)visible_index;
 
         if (result_index >= count) break;
@@ -2009,28 +562,15 @@ static bool collect_playlist_font_text(const Playlist *playlist,
         const Track_Metadata *metadata = playlist_get_metadata(playlist, index);
 
         if (metadata == NULL ||
-            !collect_font_text(metadata->title,
-                               layout->playlist_title_size)) {
+            !ui_font_collect(metadata->title, layout->playlist_title_size)) {
             return false;
         }
 
-        bool has_artist = metadata->artist[0] != '\0';
-        bool has_album = metadata->album[0] != '\0';
-
-        if (!has_artist && !has_album) continue;
-
         char details[METADATA_TEXT_SIZE * 2 + 4];
 
-        if (has_artist && has_album) {
-            snprintf(details, sizeof(details), "%s | %s", metadata->artist,
-                     metadata->album);
-        } else if (has_artist) {
-            snprintf(details, sizeof(details), "%s", metadata->artist);
-        } else {
-            snprintf(details, sizeof(details), "%s", metadata->album);
-        }
+        if (!format_track_details(metadata, details, sizeof(details))) continue;
 
-        if (!collect_font_text(details, layout->playlist_details_size)) {
+        if (!ui_font_collect(details, layout->playlist_details_size)) {
             return false;
         }
     }
@@ -2038,290 +578,511 @@ static bool collect_playlist_font_text(const Playlist *playlist,
     return true;
 }
 
-static void draw_playlist_panel(const Playlist *playlist,
-                                const Playlist_Search *search,
-                                const Ui_Layout *layout, float scroll,
-                                size_t hovered_track, double text_started_at,
-                                bool search_focused, Vector2 mouse,
-                                bool picker_busy,
-                                const Ui_Theme *theme)
+static bool collect_folder_font_text(const Playlist *playlist,
+                                     const Folder_Tree *tree,
+                                     const Ui_Layout *layout, float scroll)
+{
+    size_t count = folder_tree_visible_count(tree);
+    size_t first = scroll > 0.0f ? (size_t)floorf(scroll) : 0;
+
+    for (int visible_index = 0;
+         visible_index <= layout->visible_playlist_items + 1; ++visible_index) {
+        Folder_Tree_Row row;
+
+        if (!folder_tree_visible_row(tree, first + (size_t)visible_index,
+                                     &row)) {
+            break;
+        }
+
+        if (row.folder) {
+            const char *name = folder_tree_folder_name(tree, row.folder_index);
+
+            if (name == NULL ||
+                !ui_font_collect(name, layout->playlist_title_size)) {
+                return false;
+            }
+        } else {
+            const Track_Metadata *metadata =
+                playlist_get_metadata(playlist, row.track_index);
+
+            if (metadata == NULL ||
+                !ui_font_collect(metadata->title,
+                                 layout->playlist_title_size)) {
+                return false;
+            }
+
+            char details[METADATA_TEXT_SIZE * 2 + 4];
+
+            if (format_track_details(metadata, details, sizeof(details)) &&
+                !ui_font_collect(details, layout->playlist_details_size)) {
+                return false;
+            }
+        }
+    }
+
+    return first <= count;
+}
+
+static void draw_playlist_tabs(const Ui_Layout *layout,
+                               Playlist_Panel_Tab active_tab,
+                               float tab_animation, Vector2 mouse,
+                               const Ui_Theme *theme)
+{
+    const char *labels[] = {"Playlist", "Folders"};
+    Rectangle tabs[] = {layout->playlist_tab, layout->folders_tab};
+    float label_x[2];
+    float label_width[2];
+
+    for (int i = 0; i < 2; ++i) {
+        bool active = active_tab == (Playlist_Panel_Tab)i;
+        bool hovered = CheckCollisionPointRec(mouse, tabs[i]);
+        label_width[i] =
+            (float)ui_font_measure(labels[i], layout->playlist_header_size);
+        label_x[i] =
+            snap_pixel(tabs[i].x + (tabs[i].width - label_width[i]) / 2.0f);
+        int y = (int)snap_pixel(
+            tabs[i].y + (tabs[i].height - layout->playlist_header_size) / 2.0f -
+            2.0f);
+        ui_font_draw(
+            labels[i], (int)label_x[i], y, layout->playlist_header_size,
+            active || hovered ? theme->text_primary : theme->text_muted);
+    }
+
+    float indicator_x = label_x[0] + (label_x[1] - label_x[0]) * tab_animation;
+    float indicator_width =
+        label_width[0] + (label_width[1] - label_width[0]) * tab_animation;
+    float indicator_height =
+        snap_pixel(clamp_float(2.0f * layout->scale, 2.0f, 4.0f));
+    DrawRectangleRec(snap_rectangle((Rectangle){
+                         indicator_x,
+                         layout->playlist_tab.y + layout->playlist_tab.height -
+                             indicator_height,
+                         indicator_width,
+                         indicator_height,
+                     }),
+                     theme->progress_foreground);
+}
+
+static void draw_folder_rows(const Playlist *playlist, const Folder_Tree *tree,
+                             const Ui_Layout *layout, float scroll,
+                             size_t hovered_row, double text_started_at,
+                             const Ui_Icon_Transition *icon_transition,
+                             const Ui_Theme *theme)
+{
+    size_t first = scroll > 0.0f ? (size_t)floorf(scroll) : 0;
+    float step = layout->playlist_item_height + layout->playlist_item_gap;
+    float scroll_offset = (scroll - (float)first) * step;
+    size_t current = playlist_get_current(playlist);
+
+    for (int visible_index = 0;
+         visible_index <= layout->visible_playlist_items + 1; ++visible_index) {
+        size_t result_index = first + (size_t)visible_index;
+        Folder_Tree_Row row;
+
+        if (!folder_tree_visible_row(tree, result_index, &row)) break;
+
+        Rectangle item = ui_layout_playlist_item_bounds(layout, visible_index,
+                                                        scroll_offset);
+
+        if (!CheckCollisionRecs(item, layout->playlist_viewport)) continue;
+
+        bool hovered = result_index == hovered_row;
+        bool current_track = !row.folder && row.track_index == current;
+        Color fill = current_track ? theme->playlist_current
+                     : hovered     ? theme->playlist_hover
+                                   : theme->playlist_item;
+        DrawRectangleRec(GetCollisionRec(item, layout->playlist_viewport),
+                         fill);
+
+        float padding =
+            snap_pixel(clamp_float(9.0f * layout->scale, 7.0f, 12.0f));
+
+        if (row.folder) {
+            bool expanded = folder_tree_folder_expanded(tree, row.folder_index);
+            float icon_size =
+                snap_pixel(clamp_float(14.0f * layout->scale, 12.0f, 18.0f));
+            float indent =
+                (float)folder_tree_folder_depth(tree, row.folder_index) *
+                snap_pixel(18.0f * layout->scale);
+            Rectangle icon = snap_rectangle((Rectangle){
+                item.x + padding + indent,
+                item.y + (item.height - icon_size) / 2.0f,
+                icon_size,
+                icon_size,
+            });
+            BeginScissorMode((int)layout->playlist_viewport.x,
+                             (int)layout->playlist_viewport.y,
+                             (int)layout->playlist_viewport.width,
+                             (int)layout->playlist_viewport.height);
+            ui_icon_transition_draw_rotated(
+                icon_transition, UI_ICON_PLAYLIST_FORWARD, icon,
+                expanded ? 90.0f : 0.0f, hovered ? 1.0f : 0.72f);
+            EndScissorMode();
+
+            const char *name = folder_tree_folder_name(tree, row.folder_index);
+            float text_x = snap_pixel(icon.x + icon.width + padding);
+            Rectangle text_bounds = {
+                text_x,
+                snap_pixel(item.y +
+                           (item.height - layout->playlist_title_size) / 2.0f),
+                item.x + item.width - padding - text_x,
+                (float)layout->playlist_title_size,
+            };
+            draw_scrolling_text(name == NULL ? "Folder" : name, text_bounds,
+                                layout->playlist_title_size, layout->scale,
+                                theme->text_primary, hovered, text_started_at,
+                                &layout->playlist_viewport);
+            continue;
+        }
+
+        float text_x = snap_pixel(item.x + padding);
+
+        if (!folder_tree_folder_is_root(tree, row.folder_index)) {
+            float indent =
+                (float)folder_tree_folder_depth(tree, row.folder_index) *
+                snap_pixel(18.0f * layout->scale);
+            float guide_x =
+                snap_pixel(item.x + padding + indent + 4.0f * layout->scale);
+            DrawRectangleRec(
+                GetCollisionRec((Rectangle){guide_x, item.y, 1.0f, item.height},
+                                layout->playlist_viewport),
+                theme->surface_border);
+            text_x = snap_pixel(guide_x + padding * 1.5f);
+        }
+
+        const Track_Metadata *metadata =
+            playlist_get_metadata(playlist, row.track_index);
+
+        if (metadata == NULL) continue;
+
+        float text_width = item.x + item.width - padding - text_x;
+        char details[METADATA_TEXT_SIZE * 2 + 4];
+        bool has_details =
+            format_track_details(metadata, details, sizeof(details));
+        Color title_color =
+            current_track ? theme->text_primary : theme->text_secondary;
+        Rectangle title_bounds = {
+            text_x,
+            snap_pixel(item.y + (has_details ? 5.0f
+                                             : (item.height -
+                                                layout->playlist_title_size) /
+                                                   2.0f)),
+            text_width,
+            (float)layout->playlist_title_size,
+        };
+        draw_scrolling_text(metadata->title, title_bounds,
+                            layout->playlist_title_size, layout->scale,
+                            title_color, hovered, text_started_at,
+                            &layout->playlist_viewport);
+
+        if (has_details) {
+            Rectangle details_bounds = {
+                text_x,
+                snap_pixel(item.y + layout->playlist_title_size + 7.0f),
+                text_width,
+                (float)layout->playlist_details_size,
+            };
+            draw_scrolling_text(
+                details, details_bounds, layout->playlist_details_size,
+                layout->scale,
+                current_track ? theme->text_secondary : theme->text_muted,
+                hovered, text_started_at, &layout->playlist_viewport);
+        }
+    }
+}
+
+static void draw_playlist_panel(
+    const Playlist *playlist, const Playlist_Search *search,
+    const Folder_Tree *folder_tree, Playlist_Panel_Tab active_tab,
+    float tab_animation, const Ui_Layout *layout, float scroll,
+    size_t hovered_track, size_t hovered_folder_row, double text_started_at,
+    bool search_focused, Vector2 mouse, bool picker_busy,
+    const Ui_Icon_Transition *icon_transition, const Ui_Theme *theme)
 {
     Rectangle panel = layout->playlist_panel;
     int title_size = layout->playlist_title_size;
     int details_size = layout->playlist_details_size;
     size_t playlist_count = playlist_get_count(playlist);
-    size_t count = playlist_search_count(search, playlist);
+    bool folders_active = active_tab == PLAYLIST_PANEL_TAB_FOLDERS;
+    size_t count = folders_active ? folder_tree_visible_count(folder_tree)
+                                  : playlist_search_count(search, playlist);
     size_t current = playlist_get_current(playlist);
     size_t first = scroll > 0.0f ? (size_t)floorf(scroll) : 0;
     float step = layout->playlist_item_height + layout->playlist_item_gap;
     float scroll_offset = (scroll - (float)first) * step;
 
-    DrawRectangleRec(panel, theme->surface);
-    draw_panel_frame(panel, theme->surface_border);
-    draw_text("Playlist", (int)layout->playlist_viewport.x,
-              (int)snap_pixel(panel.y +
-                              (layout->playlist_top - panel.y -
-                               layout->playlist_header_size) /
-                                  2.0f),
-              layout->playlist_header_size,
-              theme->text_primary);
+    draw_panel_surface(panel, false, theme);
+    draw_playlist_tabs(layout, active_tab, tab_animation, mouse, theme);
 
     if (count == 0) {
-        const char *empty = playlist_count == 0 ? "No tracks" : "No matches";
-        draw_text(empty, (int)layout->playlist_viewport.x,
-                  (int)snap_pixel(layout->playlist_viewport.y + 8.0f),
-                  layout->playlist_details_size,
-                  theme->text_muted);
+        const char *empty = folders_active        ? "No folders"
+                            : playlist_count == 0 ? "No tracks"
+                                                  : "No matches";
+        ui_font_draw(empty, (int)layout->playlist_viewport.x,
+                     (int)snap_pixel(layout->playlist_viewport.y + 8.0f),
+                     layout->playlist_details_size, theme->text_muted);
     }
 
-    for (int visible_index = 0;
-         visible_index <= layout->visible_playlist_items; ++visible_index) {
-        size_t result_index = first + (size_t)visible_index;
+    if (folders_active) {
+        draw_folder_rows(playlist, folder_tree, layout, scroll,
+                         hovered_folder_row, text_started_at, icon_transition,
+                         theme);
+    } else {
+        for (int visible_index = 0;
+             visible_index <= layout->visible_playlist_items + 1;
+             ++visible_index) {
+            size_t result_index = first + (size_t)visible_index;
 
-        if (result_index >= count) break;
+            if (result_index >= count) break;
 
-        size_t index = playlist_search_track(search, result_index);
+            size_t index = playlist_search_track(search, result_index);
 
-        Rectangle item =
-            playlist_item_bounds(layout, visible_index, scroll_offset);
+            Rectangle item = ui_layout_playlist_item_bounds(
+                layout, visible_index, scroll_offset);
 
-        if (!CheckCollisionRecs(item, layout->playlist_viewport)) continue;
+            if (!CheckCollisionRecs(item, layout->playlist_viewport)) continue;
 
-        bool hovered = index == hovered_track;
-        Color fill = index == current ? theme->playlist_current
-                                      : theme->playlist_item;
+            bool hovered = index == hovered_track;
+            Color fill = index == current ? theme->playlist_current
+                                          : theme->playlist_item;
 
-        if (hovered && index != current) fill = theme->playlist_hover;
+            if (hovered && index != current) fill = theme->playlist_hover;
 
-        DrawRectangleRec(GetCollisionRec(item, layout->playlist_viewport),
-                         fill);
+            DrawRectangleRec(GetCollisionRec(item, layout->playlist_viewport),
+                             fill);
 
-        const Track_Metadata *metadata = playlist_get_metadata(playlist, index);
+            const Track_Metadata *metadata =
+                playlist_get_metadata(playlist, index);
 
-        if (metadata == NULL) continue;
+            if (metadata == NULL) continue;
 
-        char title[METADATA_TEXT_SIZE + 32];
-        snprintf(title, sizeof(title), "%zu. %s", index + 1, metadata->title);
+            char title[METADATA_TEXT_SIZE + 32];
+            snprintf(title, sizeof(title), "%zu. %s", index + 1,
+                     metadata->title);
 
-        bool has_artist = metadata->artist[0] != '\0';
-        bool has_album = metadata->album[0] != '\0';
-        float text_padding = snap_pixel(clamp_float(
-            9.0f * layout->scale, 7.0f, 12.0f));
-        float text_x = snap_pixel(item.x + text_padding);
-        float text_width = item.width - text_padding * 2.0f;
-        Color title_color = index == current ? theme->text_primary
-                                             : theme->text_secondary;
-
-        if (!has_artist && !has_album) {
-            Rectangle title_bounds = {
-                text_x,
-                snap_pixel(item.y + (item.height - title_size) / 2.0f),
-                text_width,
-                (float)title_size,
-            };
-
-            draw_scrolling_text(title, title_bounds, title_size, layout->scale,
-                                title_color, hovered, text_started_at,
-                                &layout->playlist_viewport);
-        } else {
-            Rectangle title_bounds = {
-                text_x,
-                snap_pixel(item.y + 5.0f),
-                text_width,
-                (float)title_size,
-            };
-            Color details_color = index == current ? theme->text_secondary
-                                                   : theme->text_muted;
             char details[METADATA_TEXT_SIZE * 2 + 4];
+            bool has_details =
+                format_track_details(metadata, details, sizeof(details));
+            float text_padding =
+                snap_pixel(clamp_float(9.0f * layout->scale, 7.0f, 12.0f));
+            float text_x = snap_pixel(item.x + text_padding);
+            float text_width = item.width - text_padding * 2.0f;
+            Color title_color =
+                index == current ? theme->text_primary : theme->text_secondary;
 
-            if (has_artist && has_album) {
-                snprintf(details, sizeof(details), "%s | %s", metadata->artist,
-                         metadata->album);
-            } else if (has_artist) {
-                snprintf(details, sizeof(details), "%s", metadata->artist);
+            if (!has_details) {
+                Rectangle title_bounds = {
+                    text_x,
+                    snap_pixel(item.y + (item.height - title_size) / 2.0f),
+                    text_width,
+                    (float)title_size,
+                };
+
+                draw_scrolling_text(
+                    title, title_bounds, title_size, layout->scale, title_color,
+                    hovered, text_started_at, &layout->playlist_viewport);
             } else {
-                snprintf(details, sizeof(details), "%s", metadata->album);
+                Rectangle title_bounds = {
+                    text_x,
+                    snap_pixel(item.y + 5.0f),
+                    text_width,
+                    (float)title_size,
+                };
+                Color details_color = index == current ? theme->text_secondary
+                                                       : theme->text_muted;
+
+                Rectangle details_bounds = {
+                    text_x,
+                    snap_pixel(item.y + title_size + 7.0f),
+                    text_width,
+                    (float)details_size,
+                };
+
+                draw_scrolling_text(
+                    title, title_bounds, title_size, layout->scale, title_color,
+                    hovered, text_started_at, &layout->playlist_viewport);
+                draw_scrolling_text(details, details_bounds, details_size,
+                                    layout->scale, details_color, hovered,
+                                    text_started_at,
+                                    &layout->playlist_viewport);
             }
-
-            Rectangle details_bounds = {
-                text_x,
-                snap_pixel(item.y + title_size + 7.0f),
-                text_width,
-                (float)details_size,
-            };
-
-            draw_scrolling_text(title, title_bounds, title_size, layout->scale,
-                                title_color, hovered, text_started_at,
-                                &layout->playlist_viewport);
-            draw_scrolling_text(details, details_bounds, details_size,
-                                layout->scale, details_color, hovered,
-                                text_started_at,
-                                &layout->playlist_viewport);
         }
     }
 
     Rectangle field = layout->playlist_search;
-    Color field_fill =
-        search_focused ? theme->playlist_hover : theme->playlist_item;
+    Color field_fill = folders_active   ? theme->playlist_item
+                       : search_focused ? theme->playlist_hover
+                                        : theme->playlist_item;
     DrawRectangleRec(field, field_fill);
 
-    const char *search_text = search->query[0] == '\0'
-                                  ? search_focused ? "" : "Search playlist"
-                                  : search->query;
-    Color search_color = search->query[0] == '\0' ? theme->text_faint
-                                                   : theme->text_secondary;
-    float search_padding = snap_pixel(clamp_float(
-        10.0f * layout->scale, 8.0f, 14.0f));
-    char result_count[32] = {0};
-    float count_width = 0.0f;
+    if (folders_active) {
+        char summary[64];
+        size_t folder_count = folder_tree_folder_count(folder_tree);
 
-    if (playlist_search_active(search)) {
-        snprintf(result_count, sizeof(result_count), "%zu", count);
-        count_width =
-            (float)measure_text(result_count, layout->playlist_search_size);
-    }
+        if (folder_count == 0) {
+            snprintf(summary, sizeof(summary), "%zu tracks", playlist_count);
+        } else {
+            snprintf(summary, sizeof(summary), "%zu folders | %zu tracks",
+                     folder_count, playlist_count);
+        }
+        int summary_y = (int)snap_pixel(
+            field.y + (field.height - layout->playlist_search_size) / 2.0f -
+            1.0f);
+        ui_font_draw(summary, (int)snap_pixel(field.x + 10.0f * layout->scale),
+                     summary_y, layout->playlist_search_size,
+                     theme->text_muted);
+    } else {
+        const char *search_text = search->query[0] == '\0'
+                                      ? search_focused ? "" : "Search playlist"
+                                      : search->query;
+        Color search_color = search->query[0] == '\0' ? theme->text_faint
+                                                      : theme->text_secondary;
+        float search_padding =
+            snap_pixel(clamp_float(10.0f * layout->scale, 8.0f, 14.0f));
+        char result_count[32] = {0};
+        float count_width = 0.0f;
 
-    Rectangle text_clip = {
-        field.x + search_padding,
-        field.y,
-        field.width - search_padding * 2.0f -
-            (count_width > 0.0f ? count_width + search_padding : 0.0f),
-        field.height,
-    };
-    float text_y = snap_pixel(field.y +
-                              (field.height - layout->playlist_search_size) /
-                                  2.0f -
-                              1.0f);
-    char query_prefix[PLAYLIST_SEARCH_QUERY_CAPACITY];
-    size_t prefix_size = search->cursor;
+        if (playlist_search_active(search)) {
+            snprintf(result_count, sizeof(result_count), "%zu", count);
+            count_width = (float)ui_font_measure(result_count,
+                                                 layout->playlist_search_size);
+        }
 
-    if (prefix_size >= sizeof(query_prefix)) prefix_size = 0;
+        Rectangle text_clip = {
+            field.x + search_padding,
+            field.y,
+            field.width - search_padding * 2.0f -
+                (count_width > 0.0f ? count_width + search_padding : 0.0f),
+            field.height,
+        };
+        float text_y = snap_pixel(
+            field.y + (field.height - layout->playlist_search_size) / 2.0f -
+            1.0f);
+        char query_prefix[PLAYLIST_SEARCH_QUERY_CAPACITY];
+        size_t prefix_size = search->cursor;
 
-    memcpy(query_prefix, search->query, prefix_size);
-    query_prefix[prefix_size] = '\0';
+        if (prefix_size >= sizeof(query_prefix)) prefix_size = 0;
 
-    float cursor_offset =
-        (float)measure_text(query_prefix, layout->playlist_search_size);
-    float text_x = text_clip.x;
-    float caret_width = snap_pixel(clamp_float(
-        (float)layout->playlist_search_size * 0.52f, 8.0f, 12.0f));
+        memcpy(query_prefix, search->query, prefix_size);
+        query_prefix[prefix_size] = '\0';
 
-    if (cursor_offset + caret_width > text_clip.width) {
-        text_x -= cursor_offset + caret_width - text_clip.width;
-    }
+        float cursor_offset =
+            (float)ui_font_measure(query_prefix, layout->playlist_search_size);
+        float text_x = text_clip.x;
+        float caret_width = snap_pixel(clamp_float(
+            (float)layout->playlist_search_size * 0.52f, 8.0f, 12.0f));
 
-    Rectangle caret = {
-        snap_pixel(text_x + cursor_offset),
-        text_y - 1.0f,
-        caret_width,
-        (float)layout->playlist_search_size + 2.0f,
-    };
+        if (cursor_offset + caret_width > text_clip.width) {
+            text_x -= cursor_offset + caret_width - text_clip.width;
+        }
 
-    BeginScissorMode((int)text_clip.x, (int)text_clip.y,
-                     (int)text_clip.width, (int)text_clip.height);
+        Rectangle caret = {
+            snap_pixel(text_x + cursor_offset),
+            text_y - 1.0f,
+            caret_width,
+            (float)layout->playlist_search_size + 2.0f,
+        };
 
-    if (search_focused) {
-        DrawRectangleRec(caret, theme->text_primary);
-    }
+        BeginScissorMode((int)text_clip.x, (int)text_clip.y,
+                         (int)text_clip.width, (int)text_clip.height);
 
-    draw_text(search_text, (int)snap_pixel(text_x), (int)text_y,
-              layout->playlist_search_size, search_color);
+        if (search_focused) {
+            DrawRectangleRec(caret, theme->text_primary);
+        }
 
-    EndScissorMode();
+        ui_font_draw(search_text, (int)snap_pixel(text_x), (int)text_y,
+                     layout->playlist_search_size, search_color);
 
-    if (search_focused && search->query[search->cursor] != '\0') {
-        Rectangle inverted_clip = GetCollisionRec(caret, text_clip);
-
-        BeginScissorMode((int)inverted_clip.x, (int)inverted_clip.y,
-                         (int)inverted_clip.width,
-                         (int)inverted_clip.height);
-        draw_text(search_text, (int)snap_pixel(text_x), (int)text_y,
-                  layout->playlist_search_size, field_fill);
         EndScissorMode();
-    }
 
-    if (result_count[0] != '\0') {
-        draw_text(result_count,
-                  (int)snap_pixel(field.x + field.width - search_padding -
-                                  count_width),
-                  (int)text_y, layout->playlist_search_size,
-                  theme->text_faint);
+        if (search_focused && search->query[search->cursor] != '\0') {
+            Rectangle inverted_clip = GetCollisionRec(caret, text_clip);
+
+            BeginScissorMode((int)inverted_clip.x, (int)inverted_clip.y,
+                             (int)inverted_clip.width,
+                             (int)inverted_clip.height);
+            ui_font_draw(search_text, (int)snap_pixel(text_x), (int)text_y,
+                         layout->playlist_search_size, field_fill);
+            EndScissorMode();
+        }
+
+        if (result_count[0] != '\0') {
+            ui_font_draw(result_count,
+                         (int)snap_pixel(field.x + field.width -
+                                         search_padding - count_width),
+                         (int)text_y, layout->playlist_search_size,
+                         theme->text_faint);
+        }
     }
 
     Rectangle open = layout->playlist_open;
     bool open_hovered = CheckCollisionPointRec(mouse, open);
-    Color open_fill = picker_busy ? theme->button_active
-                                  : open_hovered ? theme->button_hover
-                                                 : theme->button;
+    Color open_fill = picker_busy    ? theme->button_active
+                      : open_hovered ? theme->button_hover
+                                     : theme->button;
     const char *open_text = picker_busy ? "..." : "Open";
-    int open_width = measure_text(open_text, layout->playlist_search_size);
+    int open_width = ui_font_measure(open_text, layout->playlist_search_size);
 
     DrawRectangleRec(open, open_fill);
-    draw_text(open_text,
-              (int)snap_pixel(open.x + (open.width - (float)open_width) / 2.0f),
-              (int)snap_pixel(open.y +
-                              (open.height - layout->playlist_search_size) /
-                                  2.0f -
-                              1.0f),
-              layout->playlist_search_size,
-              picker_busy ? theme->text_muted : theme->text_primary);
+
+    if (open_hovered || picker_busy) {
+        draw_panel_frame(open, theme->surface_border);
+    }
+
+    ui_font_draw(
+        open_text,
+        (int)snap_pixel(open.x + (open.width - (float)open_width) / 2.0f),
+        (int)snap_pixel(open.y +
+                        (open.height - layout->playlist_search_size) / 2.0f -
+                        1.0f),
+        layout->playlist_search_size,
+        picker_busy ? theme->text_muted : theme->text_primary);
 }
 
-static void draw_settings_panel(const Ui_Layout *layout,
-                                bool playlist_button_on_side, Vector2 mouse,
+static void draw_setting_toggle(Rectangle option, const char *label,
+                                const char *first_line, const char *second_line,
+                                bool enabled, Vector2 mouse, float scale,
                                 const Ui_Theme *theme)
 {
-    Rectangle panel = layout->settings_panel;
-    Rectangle option = layout->settings_playlist_side;
     bool hovered = CheckCollisionPointRec(mouse, option);
-    int label_size = crisp_font_size(22.0f * layout->scale, 20, 30);
-
-    DrawRectangleRec(panel, theme->surface);
-    draw_panel_frame(panel, theme->surface_border);
-    draw_text("Settings", (int)snap_pixel(panel.x + 20.0f * layout->scale),
-              (int)snap_pixel(panel.y + 20.0f * layout->scale),
-              crisp_font_size(35.0f * layout->scale, 30, 50),
-              theme->text_primary);
+    int label_size = ui_font_crisp_size(22.0f * scale, 20, 30);
 
     DrawRectangleRec(option,
                      hovered ? theme->playlist_hover : theme->playlist_item);
-    float switch_width = snap_pixel(44.0f * layout->scale);
-    float switch_height = snap_pixel(24.0f * layout->scale);
+    float switch_width = snap_pixel(44.0f * scale);
+    float switch_height = snap_pixel(24.0f * scale);
     Rectangle toggle = snap_rectangle((Rectangle){
-        option.x + option.width - switch_width - 14.0f * layout->scale,
+        option.x + option.width - switch_width - 14.0f * scale,
         option.y + (option.height - switch_height) / 2.0f,
         switch_width,
         switch_height,
     });
-    int label_x = (int)snap_pixel(option.x + 14.0f * layout->scale);
-    float available_label_width = toggle.x - (float)label_x -
-                                  10.0f * layout->scale;
+    int label_x = (int)snap_pixel(option.x + 14.0f * scale);
+    float available_label_width = toggle.x - (float)label_x - 10.0f * scale;
 
-    if ((float)measure_text("Playlist button on side", label_size) <=
-        available_label_width) {
-        int label_y = (int)snap_pixel(option.y +
-                                      (option.height - label_size) / 2.0f);
-        draw_text("Playlist button on side", label_x, label_y, label_size,
-                  theme->text_secondary);
+    if ((float)ui_font_measure(label, label_size) <= available_label_width) {
+        int label_y =
+            (int)snap_pixel(option.y + (option.height - label_size) / 2.0f);
+        ui_font_draw(label, label_x, label_y, label_size,
+                     theme->text_secondary);
     } else {
-        int line_size = crisp_font_size(18.0f * layout->scale, 20, 20);
-        int first_y = (int)snap_pixel(option.y +
-                                      (option.height - line_size * 2) / 2.0f);
-        draw_text("Playlist button", label_x, first_y, line_size,
-                  theme->text_secondary);
-        draw_text("on side", label_x, first_y + line_size, line_size,
-                  theme->text_secondary);
+        int line_size = ui_font_crisp_size(18.0f * scale, 20, 20);
+        int first_y =
+            (int)snap_pixel(option.y + (option.height - line_size * 2) / 2.0f);
+        ui_font_draw(first_line, label_x, first_y, line_size,
+                     theme->text_secondary);
+        ui_font_draw(second_line, label_x, first_y + line_size, line_size,
+                     theme->text_secondary);
     }
 
-    Color toggle_fill = playlist_button_on_side ? theme->progress_foreground
-                                                 : theme->progress_background;
+    Color toggle_fill =
+        enabled ? theme->progress_foreground : theme->progress_background;
     DrawRectangleRec(toggle, toggle_fill);
 
-    float knob_padding = snap_pixel(3.0f * layout->scale);
+    float knob_padding = snap_pixel(3.0f * scale);
     float knob_size = toggle.height - knob_padding * 2.0f;
-    float knob_x = playlist_button_on_side
-                       ? toggle.x + toggle.width - knob_padding - knob_size
-                       : toggle.x + knob_padding;
+    float knob_x = enabled ? toggle.x + toggle.width - knob_padding - knob_size
+                           : toggle.x + knob_padding;
     DrawRectangleRec(snap_rectangle((Rectangle){
                          knob_x,
                          toggle.y + knob_padding,
@@ -2331,6 +1092,29 @@ static void draw_settings_panel(const Ui_Layout *layout,
                      theme->surface);
 }
 
+static void draw_settings_panel(const Ui_Layout *layout,
+                                bool playlist_button_on_side,
+                                bool global_media_keys, bool save_session,
+                                Vector2 mouse, const Ui_Theme *theme)
+{
+    Rectangle panel = layout->settings_panel;
+
+    draw_panel_surface(panel, false, theme);
+    ui_font_draw("Settings", (int)snap_pixel(panel.x + 20.0f * layout->scale),
+                 (int)snap_pixel(panel.y + 20.0f * layout->scale),
+                 ui_font_crisp_size(35.0f * layout->scale, 30, 50),
+                 theme->text_primary);
+
+    draw_setting_toggle(layout->settings_playlist_side,
+                        "Playlist button on side", "Playlist button", "on side",
+                        playlist_button_on_side, mouse, layout->scale, theme);
+    draw_setting_toggle(layout->settings_global_media_keys, "Global media keys",
+                        "Global media", "keys", global_media_keys, mouse,
+                        layout->scale, theme);
+    draw_setting_toggle(layout->settings_save_session, "Save session", "Save",
+                        "session", save_session, mouse, layout->scale, theme);
+}
+
 static void draw_playlist_toggle(Rectangle bounds, bool open,
                                  const Ui_Icon_Transition *icon_transition,
                                  Vector2 mouse, float opacity,
@@ -2338,22 +1122,15 @@ static void draw_playlist_toggle(Rectangle bounds, bool open,
 {
     bool hovered = CheckCollisionPointRec(mouse, bounds);
     Color fill = hovered ? theme->button_hover : theme->button;
+    fill.a = (unsigned char)((float)fill.a * opacity);
+    DrawRectangleRec(bounds, fill);
 
-    DrawRectangleRec(bounds, Fade(fill, opacity));
-    Texture2D current = open ? icon_transition->current.playlist_back
-                             : icon_transition->current.playlist_forward;
+    if (hovered) draw_panel_frame(bounds, theme->surface_border);
 
-    if (!icon_transition->active) {
-        draw_texture_icon(current, bounds, Fade(WHITE, opacity));
-        return;
-    }
-
-    float amount = ui_icon_transition_amount(icon_transition);
-    Texture2D next = open ? icon_transition->next.playlist_back
-                          : icon_transition->next.playlist_forward;
-    draw_texture_icon(current, bounds,
-                      Fade(WHITE, opacity * (1.0f - amount)));
-    draw_texture_icon(next, bounds, Fade(WHITE, opacity * amount));
+    ui_icon_transition_draw(icon_transition,
+                            open ? UI_ICON_PLAYLIST_BACK
+                                 : UI_ICON_PLAYLIST_FORWARD,
+                            bounds, opacity);
 }
 
 typedef struct {
@@ -2443,9 +1220,8 @@ static int mp_main(int argc, char **argv)
     bool config_path_available =
         app_config_default_path(config_path, sizeof(config_path));
 
-    if (config_path_available &&
-        app_config_load(config_path, &app_config) ==
-            APP_CONFIG_LOAD_NOT_FOUND) {
+    if (config_path_available && app_config_load(config_path, &app_config) ==
+                                     APP_CONFIG_LOAD_NOT_FOUND) {
         app_config_save(config_path, &app_config);
     }
 
@@ -2469,7 +1245,7 @@ static int mp_main(int argc, char **argv)
         session_default_path(session_path, sizeof(session_path));
     bool session_loaded = false;
 
-    if (session_path_available) {
+    if (session_path_available && app_config.save_session) {
         session_loaded = session_load(session_path, &playlist,
                                       &session_state) == SESSION_LOAD_OK;
     }
@@ -2540,21 +1316,20 @@ static int mp_main(int argc, char **argv)
 
     System_Theme_Monitor system_theme_monitor;
     system_theme_monitor_init(&system_theme_monitor);
-    System_Theme system_theme =
-        system_theme_monitor_get(&system_theme_monitor);
-    Ui_Theme_Transition theme_transition = {
-        .current = *ui_theme_for(system_theme),
-        .target = *ui_theme_for(system_theme),
-    };
-    const Ui_Theme *theme = &theme_transition.current;
+    System_Theme system_theme = system_theme_monitor_get(&system_theme_monitor);
+    Ui_Theme_Transition theme_transition;
+    ui_theme_transition_init(&theme_transition, system_theme);
+    const Ui_Theme *theme = ui_theme_transition_current(&theme_transition);
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, window_title);
+    media_keys_init(app_config.global_media_keys);
 
     Ui_Icon_Transition icon_transition = {0};
     Texture2D application_icon = {0};
 
-    if (!load_application_icon(&application_icon)) {
+    if (!ui_application_icon_load(&application_icon)) {
+        media_keys_uninit();
         system_theme_monitor_uninit(&system_theme_monitor);
         CloseWindow();
         playlist_uninit(&playlist);
@@ -2563,7 +1338,8 @@ static int mp_main(int argc, char **argv)
         return 1;
     }
 
-    if (!load_fonts()) {
+    if (!ui_font_init()) {
+        media_keys_uninit();
         system_theme_monitor_uninit(&system_theme_monitor);
         UnloadTexture(application_icon);
         CloseWindow();
@@ -2573,9 +1349,10 @@ static int mp_main(int argc, char **argv)
         return 1;
     }
 
-    if (!init_ui_icon_transition(&icon_transition, system_theme)) {
+    if (!ui_icon_transition_init(&icon_transition, system_theme)) {
+        media_keys_uninit();
         system_theme_monitor_uninit(&system_theme_monitor);
-        unload_fonts();
+        ui_font_uninit();
         UnloadTexture(application_icon);
         CloseWindow();
         playlist_uninit(&playlist);
@@ -2592,12 +1369,16 @@ static int mp_main(int argc, char **argv)
     Album_Art album_art = {0};
     File_Picker file_picker;
     file_picker_init(&file_picker);
+    Folder_Tree folder_tree;
+    folder_tree_init(&folder_tree);
     Playlist_Search playlist_search = {0};
     Spectrum spectrum;
     spectrum_init(&spectrum);
     int exit_code = 0;
     float playlist_scroll = 0.0f;
     float playlist_scroll_target = 0.0f;
+    Playlist_Panel_Tab playlist_panel_tab = PLAYLIST_PANEL_TAB_PLAYLIST;
+    float playlist_tab_animation = 0.0f;
     bool playlist_search_focused = false;
     bool playlist_search_dirty = false;
     Side_Panel side_panel = SIDE_PANEL_NONE;
@@ -2617,6 +1398,9 @@ static int mp_main(int argc, char **argv)
     bool open_menu_visible = false;
     Vector2 open_menu_center = {0};
     Repeat_Mode repeat_mode = (Repeat_Mode)session_state.repeat_mode;
+    Media_Session media_session;
+    bool media_session_available =
+        media_session_init(&media_session, GetWindowHandle());
 
     while (!WindowShouldClose()) {
         float ui_frame_time = GetFrameTime();
@@ -2627,8 +1411,8 @@ static int mp_main(int argc, char **argv)
         bool file_picker_failed = false;
 
         if (file_picker_take(&file_picker, &file_picker_selection,
-                             &file_picker_mode,
-                             &file_picker_graphical, &file_picker_failed)) {
+                             &file_picker_mode, &file_picker_graphical,
+                             &file_picker_failed)) {
             if (!file_picker_graphical) {
                 mp_log(ERROR,
                        "no graphical tinyfiledialogs backend is available");
@@ -2640,8 +1424,7 @@ static int mp_main(int argc, char **argv)
                     char saved_path[SESSION_PATH_SIZE];
 
                     if (save_playlist_to_path(&playlist, file_picker_selection,
-                                              saved_path,
-                                              sizeof(saved_path))) {
+                                              saved_path, sizeof(saved_path))) {
                         mp_log(INFO, "saved playlist to \"%s\"", saved_path);
                     } else {
                         mp_log(ERROR, "failed to save playlist to \"%s\"",
@@ -2672,9 +1455,9 @@ static int mp_main(int argc, char **argv)
             System_Theme detected_theme =
                 system_theme_monitor_get(&system_theme_monitor);
 
-            if (begin_ui_icon_transition(&icon_transition, detected_theme)) {
+            if (ui_icon_transition_begin(&icon_transition, detected_theme)) {
                 system_theme = detected_theme;
-                begin_theme_transition(&theme_transition, system_theme);
+                ui_theme_transition_begin(&theme_transition, system_theme);
                 mp_log(INFO, "theme: %s",
                        system_theme == SYSTEM_THEME_DARK ? "dark" : "light");
             } else {
@@ -2682,12 +1465,11 @@ static int mp_main(int argc, char **argv)
             }
         }
 
-        update_theme_transition(&theme_transition, ui_frame_time);
-        update_ui_icon_transition(&icon_transition, ui_frame_time);
+        ui_theme_transition_update(&theme_transition, ui_frame_time);
+        ui_icon_transition_update(&icon_transition, ui_frame_time);
 
         if (IsWindowResized()) {
-            spectrum_resume_at =
-                GetTime() + SPECTRUM_RESIZE_SETTLE_SECONDS;
+            spectrum_resume_at = GetTime() + SPECTRUM_RESIZE_SETTLE_SECONDS;
         }
 
         if (IsFileDropped()) {
@@ -2739,7 +1521,7 @@ static int mp_main(int argc, char **argv)
         }
 
         state = player_get_state(&player);
-        bool has_track = state != PLAYER_STOPPED;
+        bool has_track = state != PLAYER_EMPTY;
 
         if (!has_track) {
             side_panel = SIDE_PANEL_NONE;
@@ -2763,9 +1545,9 @@ static int mp_main(int argc, char **argv)
             }
         }
 
-        Ui_Layout layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(),
-                                          side_panel_animation,
-                                          playlist_button_on_side);
+        Ui_Layout layout =
+            ui_layout_make(GetScreenWidth(), GetScreenHeight(),
+                           side_panel_animation, playlist_button_on_side);
         bool playlist_panel_visible =
             has_track && animated_side_panel == SIDE_PANEL_PLAYLIST &&
             side_panel_animation > 0.001f;
@@ -2773,10 +1555,32 @@ static int mp_main(int argc, char **argv)
             has_track && animated_side_panel == SIDE_PANEL_SETTINGS &&
             side_panel_animation > 0.001f;
         bool picker_busy = file_picker_busy(&file_picker);
-        Open_Menu_Layout open_menu = make_open_menu_layout(
+        Open_Menu_Layout open_menu = ui_open_menu_layout_make(
             open_menu_center, layout.scale, layout.width, layout.height);
         bool mouse_pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
         bool open_menu_consumed_click = false;
+        playlist_tab_animation = animate_towards(
+            playlist_tab_animation,
+            playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS ? 1.0f : 0.0f,
+            12.0f, ui_frame_time);
+
+        if (playlist_panel_visible && !open_menu_visible && mouse_pressed) {
+            Playlist_Panel_Tab next_tab = playlist_panel_tab;
+
+            if (CheckCollisionPointRec(mouse, layout.playlist_tab)) {
+                next_tab = PLAYLIST_PANEL_TAB_PLAYLIST;
+            } else if (CheckCollisionPointRec(mouse, layout.folders_tab)) {
+                next_tab = PLAYLIST_PANEL_TAB_FOLDERS;
+            }
+
+            if (next_tab != playlist_panel_tab) {
+                playlist_panel_tab = next_tab;
+                playlist_scroll = 0.0f;
+                playlist_scroll_target = 0.0f;
+                playlist_search_focused = false;
+                playlist_text_started_at = GetTime();
+            }
+        }
 
         if (open_menu_visible && mouse_pressed) {
             open_menu_consumed_click = true;
@@ -2796,9 +1600,8 @@ static int mp_main(int argc, char **argv)
             }
         } else if (!open_menu_visible && !picker_busy && mouse_pressed &&
                    (!has_track ||
-                    (playlist_panel_visible && CheckCollisionPointRec(
-                                                   mouse,
-                                                   layout.playlist_open)))) {
+                    (playlist_panel_visible &&
+                     CheckCollisionPointRec(mouse, layout.playlist_open)))) {
             open_menu_consumed_click = true;
             open_menu_visible = true;
 
@@ -2813,16 +1616,15 @@ static int mp_main(int argc, char **argv)
         }
 
         picker_busy = file_picker_busy(&file_picker);
-        open_menu = make_open_menu_layout(open_menu_center, layout.scale,
-                                          layout.width, layout.height);
+        open_menu = ui_open_menu_layout_make(open_menu_center, layout.scale,
+                                             layout.width, layout.height);
         bool open_menu_blocks_mouse =
             open_menu_visible || open_menu_consumed_click;
         bool playlist_toggle_target =
             has_track &&
             (side_panel != SIDE_PANEL_NONE ||
              (playlist_button_on_side &&
-              CheckCollisionPointRec(mouse,
-                                     layout.playlist_toggle_reveal)));
+              CheckCollisionPointRec(mouse, layout.playlist_toggle_reveal)));
         playlist_toggle_animation = animate_towards(
             playlist_toggle_animation, playlist_toggle_target ? 1.0f : 0.0f,
             PLAYLIST_TOGGLE_ANIMATION_SPEED, ui_frame_time);
@@ -2856,11 +1658,20 @@ static int mp_main(int argc, char **argv)
             IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
         bool shift_down =
             IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
-        bool alt_down =
-            IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        bool alt_down = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        unsigned int media_keys =
+            media_keys_poll(IsWindowFocused(), app_config.global_media_keys);
+        Media_Session_Event media_session_event =
+            media_session_poll(&media_session);
+
+        if (media_session_available) {
+            media_keys &=
+                MEDIA_KEY_VOLUME_UP | MEDIA_KEY_VOLUME_DOWN | MEDIA_KEY_MUTE;
+        }
         bool search_changed = false;
 
-        if (playlist_panel_visible) {
+        if (playlist_panel_visible &&
+            playlist_panel_tab == PLAYLIST_PANEL_TAB_PLAYLIST) {
             if (control_down && IsKeyPressed(KEY_F)) {
                 if (!playlist_search_focused) {
                     playlist_search_cursor_end(&playlist_search);
@@ -2892,12 +1703,12 @@ static int mp_main(int argc, char **argv)
 
                 bool backspace_pressed = IsKeyPressed(KEY_BACKSPACE) ||
                                          IsKeyPressedRepeat(KEY_BACKSPACE);
-                bool delete_pressed = IsKeyPressed(KEY_DELETE) ||
-                                      IsKeyPressedRepeat(KEY_DELETE);
-                bool left_pressed = IsKeyPressed(KEY_LEFT) ||
-                                    IsKeyPressedRepeat(KEY_LEFT);
-                bool right_pressed = IsKeyPressed(KEY_RIGHT) ||
-                                     IsKeyPressedRepeat(KEY_RIGHT);
+                bool delete_pressed =
+                    IsKeyPressed(KEY_DELETE) || IsKeyPressedRepeat(KEY_DELETE);
+                bool left_pressed =
+                    IsKeyPressed(KEY_LEFT) || IsKeyPressedRepeat(KEY_LEFT);
+                bool right_pressed =
+                    IsKeyPressed(KEY_RIGHT) || IsKeyPressedRepeat(KEY_RIGHT);
 
                 if (control_down && IsKeyPressed(KEY_A)) {
                     playlist_search_cursor_start(&playlist_search);
@@ -2963,8 +1774,8 @@ static int mp_main(int argc, char **argv)
                         if (codepoint < 0x20 || codepoint == 0x7f) continue;
 
                         int utf8_size = 0;
-                        const char *utf8 = CodepointToUTF8(codepoint,
-                                                          &utf8_size);
+                        const char *utf8 =
+                            CodepointToUTF8(codepoint, &utf8_size);
 
                         if (utf8_size > 0 &&
                             playlist_search_append(&playlist_search, utf8,
@@ -2974,7 +1785,8 @@ static int mp_main(int argc, char **argv)
                     }
                 }
             }
-        } else if (side_panel != SIDE_PANEL_PLAYLIST) {
+        } else if (side_panel != SIDE_PANEL_PLAYLIST ||
+                   playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS) {
             playlist_search_focused = false;
         }
 
@@ -2995,16 +1807,31 @@ static int mp_main(int argc, char **argv)
             playlist_search_dirty = false;
         }
 
+        if (!folder_tree_sync(&folder_tree, &playlist)) {
+            mp_log(ERROR, "failed to update folder tree");
+            exit_code = 1;
+            break;
+        }
+
         size_t playlist_view_count =
-            playlist_search_count(&playlist_search, &playlist);
+            playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS
+                ? folder_tree_visible_count(&folder_tree)
+                : playlist_search_count(&playlist_search, &playlist);
+        float playlist_step =
+            layout.playlist_item_height + layout.playlist_item_gap;
+        float playlist_content_height =
+            playlist_view_count == 0
+                ? 0.0f
+                : (float)playlist_view_count * playlist_step -
+                      layout.playlist_item_gap;
         float max_playlist_scroll =
-            playlist_view_count > (size_t)layout.visible_playlist_items
-                ? (float)(playlist_view_count -
-                          (size_t)layout.visible_playlist_items)
+            playlist_content_height > layout.playlist_viewport.height
+                ? (playlist_content_height - layout.playlist_viewport.height) /
+                      playlist_step
                 : 0.0f;
 
-        playlist_scroll_target = clamp_float(playlist_scroll_target, 0.0f,
-                                             max_playlist_scroll);
+        playlist_scroll_target =
+            clamp_float(playlist_scroll_target, 0.0f, max_playlist_scroll);
         playlist_scroll =
             clamp_float(playlist_scroll, 0.0f, max_playlist_scroll);
 
@@ -3031,24 +1858,50 @@ static int mp_main(int argc, char **argv)
                    playlist_button_on_side ? "side" : "controls");
         }
 
+        if (settings_panel_visible &&
+            button_pressed(layout.settings_global_media_keys, mouse, true)) {
+            app_config.global_media_keys = !app_config.global_media_keys;
+            media_keys_set_global(app_config.global_media_keys);
+
+            if (config_path_available) {
+                app_config_save(config_path, &app_config);
+            }
+
+            mp_log(INFO, "global media keys: %s",
+                   app_config.global_media_keys ? "enabled" : "disabled");
+        }
+
+        if (settings_panel_visible &&
+            button_pressed(layout.settings_save_session, mouse, true)) {
+            app_config.save_session = !app_config.save_session;
+
+            if (config_path_available) {
+                app_config_save(config_path, &app_config);
+            }
+
+            mp_log(INFO, "save session: %s",
+                   app_config.save_session ? "enabled" : "disabled");
+        }
+
         size_t hovered_playlist_track = PLAYLIST_TRACK_NONE;
+        size_t hovered_folder_row = SIZE_MAX;
 
         if (mouse_over_playlist_list && mouse_wheel != 0.0f) {
             float previous_target = playlist_scroll_target;
             playlist_scroll_target -= mouse_wheel * 2.35f;
-            playlist_scroll_target = clamp_float(
-                playlist_scroll_target, 0.0f, max_playlist_scroll);
+            playlist_scroll_target =
+                clamp_float(playlist_scroll_target, 0.0f, max_playlist_scroll);
 
             if (playlist_scroll_target != previous_target) {
                 playlist_text_started_at = GetTime();
             }
         }
 
-        playlist_scroll = animate_towards(playlist_scroll,
-                                          playlist_scroll_target, 15.0f,
-                                          ui_frame_time);
+        playlist_scroll = animate_towards(
+            playlist_scroll, playlist_scroll_target, 15.0f, ui_frame_time);
 
-        if (playlist_search_focused && IsKeyPressed(KEY_ENTER) &&
+        if (playlist_panel_tab == PLAYLIST_PANEL_TAB_PLAYLIST &&
+            playlist_search_focused && IsKeyPressed(KEY_ENTER) &&
             playlist_view_count > 0) {
             size_t result_index = (size_t)floorf(playlist_scroll_target);
             size_t index =
@@ -3063,22 +1916,17 @@ static int mp_main(int argc, char **argv)
         if (mouse_over_playlist_list && !playlist_toggled) {
             size_t first =
                 playlist_scroll > 0.0f ? (size_t)floorf(playlist_scroll) : 0;
-            float step =
-                layout.playlist_item_height + layout.playlist_item_gap;
-            float scroll_offset =
-                (playlist_scroll - (float)first) * step;
+            float step = layout.playlist_item_height + layout.playlist_item_gap;
+            float scroll_offset = (playlist_scroll - (float)first) * step;
 
             for (int visible_index = 0;
-                 visible_index <= layout.visible_playlist_items;
+                 visible_index <= layout.visible_playlist_items + 1;
                  ++visible_index) {
                 size_t result_index = first + (size_t)visible_index;
 
                 if (result_index >= playlist_view_count) break;
 
-                size_t index =
-                    playlist_search_track(&playlist_search, result_index);
-
-                Rectangle item = playlist_item_bounds(
+                Rectangle item = ui_layout_playlist_item_bounds(
                     &layout, visible_index, scroll_offset);
 
                 if (!CheckCollisionRecs(item, layout.playlist_viewport) ||
@@ -3086,23 +1934,74 @@ static int mp_main(int argc, char **argv)
                     continue;
                 }
 
-                hovered_playlist_track = index;
+                if (playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS) {
+                    Folder_Tree_Row row;
 
-                if (button_pressed(item, mouse, true)) {
-                    if (select_track(&player, &playlist, &playback_order, index,
-                                     &metadata)) {
-                        finished_handled = false;
+                    if (!folder_tree_visible_row(&folder_tree, result_index,
+                                                 &row)) {
+                        break;
                     }
 
-                    break;
+                    hovered_folder_row = result_index;
+
+                    if (button_pressed(item, mouse, true)) {
+                        if (row.folder) {
+                            bool expanding = !folder_tree_folder_expanded(
+                                &folder_tree, row.folder_index);
+                            folder_tree_toggle(&folder_tree, row.folder_index);
+
+                            if (expanding) {
+                                size_t folder_end = result_index;
+                                Folder_Tree_Row child;
+
+                                while (folder_tree_visible_row(&folder_tree,
+                                                               folder_end + 1,
+                                                               &child) &&
+                                       folder_tree_folder_contains(
+                                           &folder_tree, row.folder_index,
+                                           child.folder_index)) {
+                                    ++folder_end;
+                                }
+
+                                float reveal_scroll =
+                                    ((float)folder_end * step + item.height -
+                                     layout.playlist_viewport.height) /
+                                    step;
+
+                                if (reveal_scroll > playlist_scroll_target) {
+                                    playlist_scroll_target = reveal_scroll;
+                                }
+                            }
+                        } else if (select_track(&player, &playlist,
+                                                &playback_order,
+                                                row.track_index, &metadata)) {
+                            finished_handled = false;
+                        }
+                    }
+                } else {
+                    size_t index =
+                        playlist_search_track(&playlist_search, result_index);
+                    hovered_playlist_track = index;
+
+                    if (button_pressed(item, mouse, true)) {
+                        if (select_track(&player, &playlist, &playback_order,
+                                         index, &metadata)) {
+                            finished_handled = false;
+                        }
+                    }
                 }
 
                 break;
             }
         }
 
-        if (hovered_playlist_track != playlist_text_track) {
-            playlist_text_track = hovered_playlist_track;
+        size_t hovered_text_item =
+            playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS
+                ? hovered_folder_row
+                : hovered_playlist_track;
+
+        if (hovered_text_item != playlist_text_track) {
+            playlist_text_track = hovered_text_item;
             playlist_text_started_at = GetTime();
         }
 
@@ -3166,7 +2065,7 @@ static int mp_main(int argc, char **argv)
         }
 
         state = player_get_state(&player);
-        has_track = state != PLAYER_STOPPED;
+        has_track = state != PLAYER_EMPTY;
 
         if (!has_track) {
             side_panel = SIDE_PANEL_NONE;
@@ -3180,7 +2079,7 @@ static int mp_main(int argc, char **argv)
             mouse_over_playlist = false;
             mouse_over_settings = false;
             playlist_search_focused = false;
-            layout = make_ui_layout(GetScreenWidth(), GetScreenHeight(), 0.0f,
+            layout = ui_layout_make(GetScreenWidth(), GetScreenHeight(), 0.0f,
                                     playlist_button_on_side);
         }
 
@@ -3246,7 +2145,19 @@ static int mp_main(int argc, char **argv)
             open_menu_visible = false;
         }
 
-        if (repeat_pressed) {
+        if (media_session_event.repeat_requested) {
+            switch (media_session_event.repeat) {
+            case MEDIA_SESSION_REPEAT_NONE:
+                repeat_mode = REPEAT_OFF;
+                break;
+            case MEDIA_SESSION_REPEAT_TRACK:
+                repeat_mode = REPEAT_ONE;
+                break;
+            case MEDIA_SESSION_REPEAT_PLAYLIST:
+                repeat_mode = REPEAT_ALL;
+                break;
+            }
+        } else if (repeat_pressed) {
             switch (repeat_mode) {
             case REPEAT_OFF:
                 repeat_mode = REPEAT_ALL;
@@ -3263,8 +2174,10 @@ static int mp_main(int argc, char **argv)
             }
         }
 
-        if (shuffle_pressed) {
-            bool enabled = !shuffle_enabled;
+        if (shuffle_pressed || media_session_event.shuffle_requested) {
+            bool enabled = media_session_event.shuffle_requested
+                               ? media_session_event.shuffle
+                               : !shuffle_enabled;
 
             if (!playback_order_set_shuffled(
                     &playback_order, playlist_get_current(&playlist), enabled,
@@ -3285,9 +2198,12 @@ static int mp_main(int argc, char **argv)
             has_track && playback_order_can_next(&playback_order, repeat_all);
 
         if (!seek_dragging &&
-            ((!playlist_search_focused && shift_down &&
-              IsKeyPressed(KEY_RIGHT) &&
+            ((((media_keys & MEDIA_KEY_NEXT) != 0 ||
+               (media_session_event.commands & MEDIA_SESSION_COMMAND_NEXT) !=
+                   0) &&
               can_next) ||
+             (!playlist_search_focused && shift_down &&
+              IsKeyPressed(KEY_RIGHT) && can_next) ||
              button_pressed(layout.next_button, mouse,
                             can_next && !sidebar_blocks_mouse))) {
             play_next_track(&player, &playlist, &playback_order, repeat_all,
@@ -3295,22 +2211,45 @@ static int mp_main(int argc, char **argv)
         }
 
         if (!seek_dragging &&
-            ((!playlist_search_focused && shift_down &&
-              IsKeyPressed(KEY_LEFT) &&
+            ((((media_keys & MEDIA_KEY_PREVIOUS) != 0 ||
+               (media_session_event.commands &
+                MEDIA_SESSION_COMMAND_PREVIOUS) != 0) &&
               can_previous) ||
+             (!playlist_search_focused && shift_down &&
+              IsKeyPressed(KEY_LEFT) && can_previous) ||
              button_pressed(layout.previous_button, mouse,
                             can_previous && !sidebar_blocks_mouse))) {
             play_previous_track(&player, &playlist, &playback_order, repeat_all,
                                 &metadata);
         }
 
+        state = player_get_state(&player);
+        bool session_toggle =
+            (media_session_event.commands & MEDIA_SESSION_COMMAND_TOGGLE) !=
+                0 ||
+            ((media_session_event.commands & MEDIA_SESSION_COMMAND_PLAY) != 0 &&
+             state != PLAYER_PLAYING) ||
+            ((media_session_event.commands & MEDIA_SESSION_COMMAND_PAUSE) !=
+                 0 &&
+             state == PLAYER_PLAYING);
         bool toggle_requested =
             has_track && !seek_dragging &&
-            ((!playlist_search_focused &&
+            (session_toggle || ((media_keys & MEDIA_KEY_PLAY_PAUSE) != 0) ||
+             (!playlist_search_focused &&
               (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_P))) ||
              button_pressed(layout.play_button, mouse, !sidebar_blocks_mouse));
 
         if (toggle_requested && !player_toggle(&player)) {
+            exit_code = 1;
+            break;
+        }
+
+        bool stop_requested =
+            (media_keys & MEDIA_KEY_STOP) != 0 ||
+            (media_session_event.commands & MEDIA_SESSION_COMMAND_STOP) != 0;
+
+        if (has_track && !seek_dragging && stop_requested &&
+            !player_stop(&player)) {
             exit_code = 1;
             break;
         }
@@ -3324,13 +2263,24 @@ static int mp_main(int argc, char **argv)
         if (has_track && !playlist_search_focused && IsKeyPressed(KEY_DOWN)) {
             volume_change -= 0.05f;
         }
+        if (has_track && (media_keys & MEDIA_KEY_VOLUME_UP) != 0) {
+            volume_change += 0.05f;
+        }
+        if (has_track && (media_keys & MEDIA_KEY_VOLUME_DOWN) != 0) {
+            volume_change -= 0.05f;
+        }
 
         if (volume_change != 0.0f) {
             player_adjust_volume(&player, volume_change);
         }
 
+        if (has_track && media_session_event.volume_requested) {
+            player_set_volume(&player, (float)media_session_event.volume);
+        }
+
         float volume_padding = snap_pixel(4.0f * layout.scale);
-        int volume_slot_width = measure_text("Volume 100%", layout.status_size);
+        int volume_slot_width =
+            ui_font_measure("Volume 100%", layout.status_size);
         Rectangle volume_bounds = snap_rectangle((Rectangle){
             layout.progress_bar.x + layout.progress_bar.width -
                 (float)volume_slot_width - volume_padding,
@@ -3339,7 +2289,8 @@ static int mp_main(int argc, char **argv)
             (float)layout.status_size + volume_padding * 2.0f,
         });
 
-        if ((has_track && !playlist_search_focused && IsKeyPressed(KEY_M)) ||
+        if ((has_track && (media_keys & MEDIA_KEY_MUTE) != 0) ||
+            (has_track && !playlist_search_focused && IsKeyPressed(KEY_M)) ||
             button_pressed(volume_bounds, mouse,
                            has_track && !sidebar_blocks_mouse)) {
             player_toggle_mute(&player);
@@ -3355,13 +2306,28 @@ static int mp_main(int argc, char **argv)
         }
 
         int volume_x = (int)(layout.progress_bar.x + layout.progress_bar.width -
-                             measure_text(volume_text, layout.status_size));
+                             ui_font_measure(volume_text, layout.status_size));
         bool volume_hovered = has_track && !sidebar_blocks_mouse &&
                               CheckCollisionPointRec(mouse, volume_bounds);
 
         float cursor = player_get_cursor(&player);
         float length = player_get_length(&player);
         float keyboard_seek = 0.0f;
+
+        if (has_track && !seek_dragging && media_session_event.seek_requested) {
+            float requested_position = (float)media_session_event.seek_position;
+
+            if (requested_position < 0.0f) requested_position = 0.0f;
+            if (length > 0.0f && requested_position > length) {
+                requested_position = length;
+            }
+
+            if (!player_seek(&player, requested_position)) {
+                exit_code = 1;
+                break;
+            }
+            cursor = requested_position;
+        }
 
         if (has_track && !playlist_search_focused && !seek_dragging &&
             !control_down && IsKeyPressed(KEY_X)) {
@@ -3436,12 +2402,45 @@ static int mp_main(int argc, char **argv)
         }
 
         state = player_get_state(&player);
-        has_track = state != PLAYER_STOPPED;
+        has_track = state != PLAYER_EMPTY;
         const char *album_art_path =
             !has_track
                 ? NULL
                 : playlist_get(&playlist, playlist_get_current(&playlist));
         album_art_update(&album_art, album_art_path);
+        album_art_advance(&album_art, ui_frame_time);
+        bool session_repeat_all = repeat_mode == REPEAT_ALL;
+        bool session_can_previous =
+            has_track &&
+            playback_order_can_previous(&playback_order, session_repeat_all);
+        bool session_can_next =
+            has_track &&
+            playback_order_can_next(&playback_order, session_repeat_all);
+        Media_Session_Playback session_playback = MEDIA_SESSION_EMPTY;
+
+        if (state == PLAYER_PLAYING) {
+            session_playback = MEDIA_SESSION_PLAYING;
+        } else if (state == PLAYER_PAUSED) {
+            session_playback = MEDIA_SESSION_PAUSED;
+        } else if (has_track) {
+            session_playback = MEDIA_SESSION_STOPPED;
+        }
+
+        Media_Session_Repeat session_repeat = MEDIA_SESSION_REPEAT_NONE;
+
+        if (repeat_mode == REPEAT_ONE) {
+            session_repeat = MEDIA_SESSION_REPEAT_TRACK;
+        } else if (repeat_mode == REPEAT_ALL) {
+            session_repeat = MEDIA_SESSION_REPEAT_PLAYLIST;
+        }
+
+        media_session_update(
+            &media_session, album_art_path, has_track ? &metadata : NULL,
+            session_playback, player_get_cursor(&player),
+            player_get_length(&player),
+            player_is_muted(&player) ? 0.0 : player_get_volume(&player),
+            session_can_previous, session_can_next, shuffle_enabled,
+            session_repeat);
         const char *status;
 
         switch (state) {
@@ -3455,6 +2454,9 @@ static int mp_main(int argc, char **argv)
             status = "Finished";
             break;
         case PLAYER_STOPPED:
+            status = "Stopped";
+            break;
+        case PLAYER_EMPTY:
             status = "";
             break;
         }
@@ -3469,7 +2471,7 @@ static int mp_main(int argc, char **argv)
 
         int time_x = (int)(layout.progress_bar.x +
                            (layout.progress_bar.width -
-                            measure_text(time_text, layout.status_size)) /
+                            ui_font_measure(time_text, layout.status_size)) /
                                2.0f);
 
         char playlist_text[64];
@@ -3478,19 +2480,12 @@ static int mp_main(int argc, char **argv)
                  playlist_get_current(&playlist) + 1,
                  playlist_get_count(&playlist));
 
-        int playlist_x = status_x + measure_text(status, layout.status_size) +
+        int playlist_x = status_x +
+                         ui_font_measure(status, layout.status_size) +
                          (int)snap_pixel(18.0f * layout.scale);
 
         char details_text[METADATA_TEXT_SIZE * 2 + 8];
-
-        if (metadata.artist[0] != '\0' && metadata.album[0] != '\0') {
-            snprintf(details_text, sizeof(details_text), "%s | %s",
-                     metadata.artist, metadata.album);
-        } else if (metadata.artist[0] != '\0') {
-            snprintf(details_text, sizeof(details_text), "%s", metadata.artist);
-        } else {
-            snprintf(details_text, sizeof(details_text), "%s", metadata.album);
-        }
+        format_track_details(&metadata, details_text, sizeof(details_text));
 
         float progress = length > 0.0f ? cursor / length : 0.0f;
 
@@ -3562,23 +2557,26 @@ static int mp_main(int argc, char **argv)
 
         const char *drop_title = "Drag & drop music here";
         const char *drop_hint = "or click to open files or a folder";
-        int drop_title_size = crisp_font_size(40.0f * layout.scale, 30, 60);
-        int drop_hint_size = crisp_font_size(20.0f * layout.scale, 16, 28);
-        bool fonts_ready = collect_font_text(metadata.title, layout.title_size) &&
-                           collect_font_text(details_text,
-                                             layout.status_size);
+        int drop_title_size = ui_font_crisp_size(40.0f * layout.scale, 30, 60);
+        int drop_hint_size = ui_font_crisp_size(20.0f * layout.scale, 16, 28);
+        bool fonts_ready = ui_font_collect(metadata.title, layout.title_size) &&
+                           ui_font_collect(details_text, layout.status_size);
 
         if (fonts_ready && !has_track) {
-            fonts_ready = collect_font_text(drop_title, drop_title_size) &&
-                          collect_font_text(drop_hint, drop_hint_size);
+            fonts_ready = ui_font_collect(drop_title, drop_title_size) &&
+                          ui_font_collect(drop_hint, drop_hint_size);
         }
 
         if (fonts_ready && playlist_panel_visible) {
-            fonts_ready = collect_playlist_font_text(
-                &playlist, &playlist_search, &layout, playlist_scroll);
+            fonts_ready =
+                playlist_panel_tab == PLAYLIST_PANEL_TAB_FOLDERS
+                    ? collect_folder_font_text(&playlist, &folder_tree, &layout,
+                                               playlist_scroll)
+                    : collect_playlist_font_text(&playlist, &playlist_search,
+                                                 &layout, playlist_scroll);
         }
 
-        if (!fonts_ready || !rebuild_dirty_fonts()) {
+        if (!fonts_ready || !ui_font_rebuild()) {
             mp_log(ERROR, "failed to update Noto Sans glyphs");
             exit_code = 1;
             break;
@@ -3588,15 +2586,14 @@ static int mp_main(int argc, char **argv)
         ClearBackground(theme->background);
 
         if (!has_track) {
-            float icon_size = snap_pixel(clamp_float(
-                150.0f * layout.scale, 104.0f, 190.0f));
+            float icon_size =
+                snap_pixel(clamp_float(150.0f * layout.scale, 104.0f, 190.0f));
             float icon_gap = snap_pixel(24.0f * layout.scale);
             float hint_gap = snap_pixel(14.0f * layout.scale);
-            float group_height = icon_size + icon_gap +
-                                 (float)drop_title_size + hint_gap +
-                                 (float)drop_hint_size;
-            float group_y = snap_pixel(
-                ((float)layout.height - group_height) / 2.0f);
+            float group_height = icon_size + icon_gap + (float)drop_title_size +
+                                 hint_gap + (float)drop_hint_size;
+            float group_y =
+                snap_pixel(((float)layout.height - group_height) / 2.0f);
             Rectangle icon_bounds = snap_rectangle((Rectangle){
                 ((float)layout.width - icon_size) / 2.0f,
                 group_y,
@@ -3604,39 +2601,40 @@ static int mp_main(int argc, char **argv)
                 icon_size,
             });
             int drop_title_x =
-                (layout.width - measure_text(drop_title, drop_title_size)) / 2;
-            int drop_title_y =
-                (int)snap_pixel(group_y + icon_size + icon_gap);
+                (layout.width - ui_font_measure(drop_title, drop_title_size)) /
+                2;
+            int drop_title_y = (int)snap_pixel(group_y + icon_size + icon_gap);
             int drop_hint_x =
-                (layout.width - measure_text(drop_hint, drop_hint_size)) / 2;
-            int drop_hint_y = (int)snap_pixel(
-                (float)drop_title_y + drop_title_size + hint_gap);
+                (layout.width - ui_font_measure(drop_hint, drop_hint_size)) / 2;
+            int drop_hint_y = (int)snap_pixel((float)drop_title_y +
+                                              drop_title_size + hint_gap);
 
-            draw_texture_icon(application_icon, icon_bounds, WHITE);
-            draw_text(drop_title, drop_title_x, drop_title_y, drop_title_size,
-                      theme->text_primary);
-            draw_text(drop_hint, drop_hint_x, drop_hint_y, drop_hint_size,
-                      theme->text_muted);
+            ui_application_icon_draw(application_icon, icon_bounds);
+            ui_font_draw(drop_title, drop_title_x, drop_title_y,
+                         drop_title_size, theme->text_primary);
+            ui_font_draw(drop_hint, drop_hint_x, drop_hint_y, drop_hint_size,
+                         theme->text_muted);
         } else {
-            draw_album_art(&album_art, layout.album_art, theme);
+            album_art_draw(&album_art, layout.album_art, theme->background);
             draw_spectrum(&spectrum, layout.spectrum, bar_count, layout.scale,
                           theme);
             draw_scrolling_text(metadata.title, current_title_bounds,
                                 layout.title_size, layout.scale,
                                 theme->text_primary, current_title_hovered,
                                 current_title_text_started_at, NULL);
-            draw_text(details_text, (int)layout.title_x, (int)layout.details_y,
-                      layout.status_size, theme->text_muted);
-            draw_text(status, status_x, (int)layout.metadata_y,
-                      layout.status_size, theme->text_secondary);
-            draw_text(playlist_text, playlist_x, (int)layout.metadata_y,
-                      layout.status_size, theme->text_faint);
-            draw_text(time_text, time_x, (int)layout.metadata_y,
-                      layout.status_size, theme->text_muted);
-            draw_text(volume_text, volume_x, (int)layout.metadata_y,
-                      layout.status_size,
-                      volume_hovered ? theme->text_secondary
-                                     : theme->text_muted);
+            ui_font_draw(details_text, (int)layout.title_x,
+                         (int)layout.details_y, layout.status_size,
+                         theme->text_muted);
+            ui_font_draw(status, status_x, (int)layout.metadata_y,
+                         layout.status_size, theme->text_secondary);
+            ui_font_draw(playlist_text, playlist_x, (int)layout.metadata_y,
+                         layout.status_size, theme->text_faint);
+            ui_font_draw(time_text, time_x, (int)layout.metadata_y,
+                         layout.status_size, theme->text_muted);
+            ui_font_draw(volume_text, volume_x, (int)layout.metadata_y,
+                         layout.status_size,
+                         volume_hovered ? theme->text_secondary
+                                        : theme->text_muted);
 
             DrawRectangleRec(layout.progress_bar, theme->progress_background);
             DrawRectangleRec(progress_fill, progress_hovered
@@ -3644,9 +2642,8 @@ static int mp_main(int argc, char **argv)
                                                 : theme->progress_foreground);
             float handle_scale = progress_hovered ? 14.0f : 10.0f;
             float handle_size = snap_pixel(handle_scale * layout.scale);
-            Color handle_color =
-                progress_hovered ? theme->progress_hover
-                                 : theme->progress_foreground;
+            Color handle_color = progress_hovered ? theme->progress_hover
+                                                  : theme->progress_foreground;
             DrawRectangleRec(snap_rectangle((Rectangle){
                                  progress_handle.x - handle_size / 2.0f,
                                  progress_handle.y - handle_size / 2.0f,
@@ -3655,47 +2652,49 @@ static int mp_main(int argc, char **argv)
                              }),
                              handle_color);
 
-            draw_button(layout.shuffle_button, BUTTON_SHUFFLE,
+            draw_button(layout.shuffle_button, UI_ICON_SHUFFLE,
                         &icon_transition, mouse, true, shuffle_enabled, theme);
-            draw_button(layout.previous_button, BUTTON_PREVIOUS,
+            draw_button(layout.previous_button, UI_ICON_PREVIOUS,
                         &icon_transition, mouse, can_previous, false, theme);
             draw_button(layout.play_button,
-                        state == PLAYER_PLAYING ? BUTTON_PAUSE : BUTTON_PLAY,
+                        state == PLAYER_PLAYING ? UI_ICON_PAUSE : UI_ICON_PLAY,
                         &icon_transition, mouse, true, false, theme);
-            draw_button(layout.next_button, BUTTON_NEXT, &icon_transition,
+            draw_button(layout.next_button, UI_ICON_NEXT, &icon_transition,
                         mouse, can_next, false, theme);
             draw_button(layout.repeat_button,
-                        repeat_mode == REPEAT_ONE ? BUTTON_REPEAT_ONE
-                                                  : BUTTON_REPEAT,
+                        repeat_mode == REPEAT_ONE ? UI_ICON_REPEAT_ONE
+                                                  : UI_ICON_REPEAT,
                         &icon_transition, mouse, true,
                         repeat_mode != REPEAT_OFF, theme);
             if (!playlist_button_on_side) {
-                draw_button(layout.playlist_button, BUTTON_PLAYLIST,
+                draw_button(layout.playlist_button, UI_ICON_PLAYLIST,
                             &icon_transition, mouse, true,
                             side_panel == SIDE_PANEL_PLAYLIST, theme);
             }
-            draw_button(layout.settings_button, BUTTON_SETTINGS,
+            draw_button(layout.settings_button, UI_ICON_SETTINGS,
                         &icon_transition, mouse, true,
                         side_panel == SIDE_PANEL_SETTINGS, theme);
         }
 
         if (playlist_panel_visible) {
             draw_playlist_panel(
-                &playlist, &playlist_search, &layout, playlist_scroll,
-                hovered_playlist_track, playlist_text_started_at,
-                playlist_search_focused, mouse, picker_busy, theme);
+                &playlist, &playlist_search, &folder_tree, playlist_panel_tab,
+                playlist_tab_animation, &layout, playlist_scroll,
+                hovered_playlist_track, hovered_folder_row,
+                playlist_text_started_at, playlist_search_focused, mouse,
+                picker_busy, &icon_transition, theme);
         }
 
         if (settings_panel_visible) {
-            draw_settings_panel(&layout, playlist_button_on_side, mouse,
-                                theme);
+            draw_settings_panel(&layout, playlist_button_on_side,
+                                app_config.global_media_keys,
+                                app_config.save_session, mouse, theme);
         }
 
         if (playlist_toggle_visible) {
-            draw_playlist_toggle(playlist_toggle_bounds,
-                                 side_panel != SIDE_PANEL_NONE,
-                                 &icon_transition, mouse,
-                                 playlist_toggle_animation, theme);
+            draw_playlist_toggle(
+                playlist_toggle_bounds, side_panel != SIDE_PANEL_NONE,
+                &icon_transition, mouse, playlist_toggle_animation, theme);
         }
 
         if (open_menu_visible) {
@@ -3705,7 +2704,7 @@ static int mp_main(int argc, char **argv)
         EndDrawing();
     }
 
-    if (session_path_available) {
+    if (session_path_available && app_config.save_session) {
         size_t count = playlist_get_count(&playlist);
 
         Session_State saved_state = {
@@ -3721,13 +2720,16 @@ static int mp_main(int argc, char **argv)
     }
 
     album_art_clear(&album_art);
-    unload_ui_icon_transition(&icon_transition);
+    media_session_uninit(&media_session);
+    ui_icon_transition_uninit(&icon_transition);
     UnloadTexture(application_icon);
-    unload_fonts();
+    ui_font_uninit();
+    media_keys_uninit();
     file_picker_uninit(&file_picker);
     system_theme_monitor_uninit(&system_theme_monitor);
     CloseWindow();
 
+    folder_tree_uninit(&folder_tree);
     playlist_search_uninit(&playlist_search);
     playlist_uninit(&playlist);
     playback_order_uninit(&playback_order);
