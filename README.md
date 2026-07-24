@@ -1,36 +1,100 @@
 # mp
 
 <p align="center">
-  <img src="./assets/icon.png" width="50%" alt="mp logo">
+  <img src="./assets/icon.png" width="180" alt="mp logo">
+</p>
+
+<p align="center">A small, fast desktop music player.</p>
+
+<p align="center">
+  <a href="https://github.com/kurumihere/mp/blob/master/LICENSE"><img src="https://img.shields.io/github/license/kurumihere/mp" alt="MIT license"></a>&nbsp;&nbsp;<a href="https://github.com/kurumihere/mp/releases/latest"><img src="https://img.shields.io/github/v/release/kurumihere/mp?label=release" alt="Latest release"></a>&nbsp;&nbsp;<a href="https://github.com/kurumihere/mp/actions/workflows/build.yml"><img src="https://github.com/kurumihere/mp/actions/workflows/build.yml/badge.svg?branch=master" alt="Build status"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/kurumihere/mp/actions/workflows/build.yml">
-    <img src="https://github.com/kurumihere/mp/actions/workflows/build.yml/badge.svg?branch=master" alt="Build">
-  </a>
-
-  <a href="https://github.com/kurumihere/mp/releases/latest">
-    <img src="https://img.shields.io/github/v/release/kurumihere/mp?label=release" alt="Latest release">
-  </a>
+  <a href="#download">Download</a> |
+  <a href="#features">Features</a> |
+  <a href="#controls">Controls</a> |
+  <a href="#build-from-source">Build from source</a>
 </p>
 
-mp it's a simple, faster, and usefull music player.
+<p align="center">
+  <img src="./docs/images/in-action.png" width="100%" alt="mp playing music">
+</p>
 
-## supported audio formats
+## About
 
-- flac
-- mp3
-- wav
+`mp` is a simple desktop music player written in C. It uses [raylib] for the
+interface and [miniaudio] for decoding and playback.
 
-## download mp!
+The project aims to provide a focused player with a small, native application
+feel, without requiring a large desktop music library or a background service.
 
-- Windows: [latest-installer](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64-setup.exe), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64.zip).
-- Linux: [AppImage](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.AppImage), [Debian package](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.deb), [RPM](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.rpm), [Arch linux AUR](https://aur.archlinux.org/packages/mp-player-bin), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.tar.gz).
-- MacOS: [DMG](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.dmg), [archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.tar.gz).
+## Features
 
-## build from source
+- Play FLAC, MP3, and WAV files.
+- Open individual files, folders, or M3U playlists.
+- Add music by dragging files and folders into the player.
+- Search tracks in the current playlist.
+- Shuffle playback and repeat one track or the whole playlist.
+- Display embedded album art and a playback spectrum.
+- Save and load M3U playlists.
+- Remember the playback session, volume, and current track.
+- Use global media keys where supported by the platform.
+- Choose light and dark interface themes.
+- Run on Linux, Windows, and macOS.
 
-### Arch linux
+## Screenshots
+
+<p align="center">
+  <img src="./docs/images/sidebar.png" width="100%" alt="mp with the playlist sidebar open">
+</p>
+
+<p align="center">
+  <img src="./docs/images/settings.png" width="100%" alt="mp settings panel">
+</p>
+
+<p align="center">
+  <img src="./docs/images/in-desktop.png" width="100%" alt="mp running on the desktop">
+</p>
+
+## Download
+
+The latest release is [v0.2.1](https://github.com/kurumihere/mp/releases/tag/v0.2.1).
+
+### Windows
+
+- [Installer](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64-setup.exe)
+- [Portable archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-windows-x86_64.zip)
+
+### Linux
+
+- [AppImage](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.AppImage)
+- [Debian package](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.deb)
+- [RPM package](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.rpm)
+- [Arch Linux AUR package](https://aur.archlinux.org/packages/mp-player-bin)
+- [Archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-linux-x86_64.tar.gz)
+
+### macOS
+
+- [DMG](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.dmg)
+- [Archive](https://github.com/kurumihere/mp/releases/download/v0.2.1/mp-0.2.1-macos-arm64.tar.gz)
+
+## Build from source
+
+The build system bootstraps itself with a C compiler and builds the application
+with [nob](https://github.com/tsoding/nob.h), a small C-based build tool.
+
+### Requirements
+
+You need:
+
+- A C compiler
+- `pkg-config`
+- FreeType 2
+- GLib 2
+- OpenGL and the platform windowing libraries
+
+### Arch Linux
 
 ```sh
 sudo pacman -Syu --needed \
@@ -52,7 +116,6 @@ sudo pacman -Syu --needed \
 
 ```sh
 sudo apt update
-
 sudo apt install --no-install-recommends \
     build-essential \
     git \
@@ -86,17 +149,11 @@ sudo dnf install \
 
 ### Windows
 
-install [MSYS2](https://www.msys2.org/), then open the **MSYS2 UCRT64** terminal.
-
-update MSYS2:
+Install [MSYS2](https://www.msys2.org/) and use the **MSYS2 UCRT64** terminal.
+Do not build from the plain MSYS terminal, PowerShell, or Command Prompt.
 
 ```sh
 pacman -Syu
-```
-
-restart the UCRT64 terminal if requested, then install the dependencies:
-
-```sh
 pacman -S --needed \
     git \
     mingw-w64-ucrt-x86_64-gcc \
@@ -105,26 +162,16 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-pkgconf
 ```
 
-> Use the **UCRT64** terminal. Do not build the project from the plain MSYS terminal, PowerShell or Command Prompt.
-
 ### macOS
 
-install the Xcode Command Line Tools:
+Install the Xcode Command Line Tools and [Homebrew](https://brew.sh/):
 
 ```sh
 xcode-select --install
+brew install freetype glib pkgconf
 ```
 
-install [Homebrew](https://brew.sh/), then install the required libraries:
-
-```sh
-brew install \
-    freetype \
-    glib \
-    pkgconf 
-```
-
-after installing the dependencies:
+### Compile
 
 ```sh
 git clone https://github.com/kurumihere/mp.git
@@ -134,16 +181,53 @@ cc -std=c99 -o nob nob.c
 ./nob
 ```
 
-The resulting executable will be located at:
+The executable is written to `build/mp` on Linux and macOS, or
+`build/mp.exe` on Windows.
 
-| Platform | Executable     |
-| -------- | -------------- |
-| Linux    | `build/mp`     |
-| Windows  | `build/mp.exe` |
-| macOS    | `build/mp`     |
+## Usage
 
-build and run the application:
+Build and launch the player:
 
 ```sh
 ./nob run
 ```
+
+Open audio files, folders, or playlists directly:
+
+```sh
+./nob run ~/Music
+./nob run ~/Music/album.flac
+./nob run ~/Music/favorites.m3u
+```
+
+You can also add files and folders from the file picker or drag them into the
+player window.
+
+## Controls
+
+The most frequently used keyboard shortcuts are:
+
+| Action | Shortcut |
+| --- | --- |
+| Search playlist | `Ctrl+F` |
+| Toggle repeat mode | `R` |
+| Toggle shuffle | `S` |
+| Toggle playlist sidebar | `L` |
+| Open settings | `Q` |
+
+Playback can also be controlled with the buttons in the player, the seek bar,
+and supported system media keys.
+
+## Configuration and data
+
+`mp` stores its configuration and playback session in the platform's standard
+user data directory. The exact path is platform-dependent.
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome. Please open an
+[issue](https://github.com/kurumihere/mp/issues) before starting a large change
+so the direction can be discussed first.
+
+[miniaudio]: https://github.com/mackron/miniaudio
+[raylib]: https://www.raylib.com/
